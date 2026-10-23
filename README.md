@@ -67,7 +67,7 @@ machine-specific absolute path.
 ## Exposed tools
 
 > **⚠️** marks tools that require the game to be **running** and the
-> `automation-bridge` debug extension **installed in the project**. All
+> [`automation-bridge`](https://github.com/defold/extension-automation-bridge) debug extension **installed in the project**. All
 > `defold_bridge_*` tools, plus `defold_screenshot` and `defold_inject_input`,
 > fall in this category. Everything else works with just the editor.
 
@@ -142,7 +142,7 @@ Optionally create `active_project.txt` with the path to your current project
 (used as a fallback when no editor is open):
 
 ```
-C:\GAMEDEV\DEFOLD\TrickyChallenge
+C:\GAMEDEV\DEFOLD\MyGameProject
 ```
 
 ## Configuration
@@ -177,7 +177,7 @@ adjust the paths to your install location.
   you need the engine service + the **Automation Bridge** extension.
 - **Automation Bridge v2**: all `defold_bridge_*` tools (as well as
   `defold_screenshot` and `defold_inject_input`) require the game to be
-  running and the official debug extension `automation-bridge` to be installed
+  running and the official debug extension [`automation-bridge`](https://github.com/defold/extension-automation-bridge) to be installed
   in the project. Without it, these tools return a clear error. The
   `defold_bridge_metal*` tools only work on macOS.
 - **Editor launch**: discovery goes through
