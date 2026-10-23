@@ -1,0 +1,19 @@
+{
+  "servers": [
+    {
+      "name": "Defold",
+      "description": "Pilote de l'éditeur Defold : compiler, lancer, lire les logs, screenshots, doc API",
+      "enabled": true,
+      "connection": {
+        "type": "stdio",
+        "command": "C:\\GAMEDEV\\DEFOLD\\defold-mcp\\.venv\\Scripts\\python.exe",
+        "args": [
+          "C:\\GAMEDEV\\DEFOLD\\defold-mcp\\server.py"
+        ],
+        "env": {},
+        "cwd": "C:\\GAMEDEV\\DEFOLD\\defold-mcp\\",
+        "timeoutMs": 120000
+      }
+    }
+  ]
+}

@@ -62,6 +62,7 @@ machine-specific absolute path.
 | `test_client.py` | Client tests against the mock. |
 | `requirements.txt` | Dependencies. |
 | `active_project.txt` | *(gitignored)* Local pointer to the active project (fallback when no editor is open). |
+| `mcp-config.example.json` | *(example)* Ready-to-use MCP client config template (120 s request timeout). |
 
 ## Exposed tools
 
@@ -139,26 +140,13 @@ Optionally create `active_project.txt` with the path to your current project
 C:\GAMEDEV\DEFOLD\TrickyChallenge
 ```
 
-## MCP client configuration (Bionic)
+## Configuration
 
-In Bionic, register the server in your MCP config (e.g. `ng-mcp.json`). Point
-the `command` at the venv's Python interpreter and `args` at `server.py`. No
-env vars are required:
-
-```json
-{
-  "mcpServers": {
-    "Defold": {
-      "command": "C:\\GAMEDEV\\DEFOLD\\defold-mcp\\.venv\\Scripts\\python.exe",
-      "args": ["C:\\GAMEDEV\\DEFOLD\\defold-mcp\\server.py"],
-      "env": {}
-    }
-  }
-}
-```
-
-After editing the config, toggle the server **off/on** in **Settings → MCP** to
-reload it. (Bionic does not auto-respawn a stopped stdio server.)
+A ready-to-use MCP client config template is provided in
+[`mcp-config.example.json`](mcp-config.example.json). It points at the venv's
+Python interpreter and `server.py`, needs no env vars, and sets a **120 s**
+request timeout (`timeoutMs: 120000`). Import it into your MCP client and
+adjust the paths to your install location.
 
 ## Typical usage (by an agent)
 
