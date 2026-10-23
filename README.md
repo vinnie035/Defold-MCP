@@ -45,7 +45,7 @@ A plain-text file (gitignored) containing the absolute path to a Defold
 project, e.g.:
 
 ```
-C:\GAMEDEV\DEFOLD\TrickyChallenge
+C:\GAMEDEV\DEFOLD\MyGameProject
 ```
 
 It is used **only** when no editor is open. Update it when you switch projects
@@ -66,6 +66,11 @@ machine-specific absolute path.
 
 ## Exposed tools
 
+> **⚠️** marks tools that require the game to be **running** and the
+> `automation-bridge` debug extension **installed in the project**. All
+> `defold_bridge_*` tools, plus `defold_screenshot` and `defold_inject_input`,
+> fall in this category. Everything else works with just the editor.
+
 | Tool | Description |
 |---|---|
 | `defold_status` | Editor installed? project open? port? version? available commands? |
@@ -76,8 +81,8 @@ machine-specific absolute path.
 | `defold_preview` | Render a resource (collection, GUI, atlas…) as a **PNG**. |
 | `defold_ref` | Search the API docs embedded in the editor. |
 | `defold_engine_info` | `/ping`, `/info`, `/state` of the running game. |
-| `defold_screenshot` | **Runtime** capture via the *Automation Bridge v2* extension (optional `after_frames`). |
-| `defold_inject_input` | Inject a mouse click via the *Automation Bridge v2*. |
+| `defold_screenshot` ⚠️ | **Runtime** capture via the *Automation Bridge v2* extension (optional `after_frames`). |
+| `defold_inject_input` ⚠️ | Inject a mouse click via the *Automation Bridge v2*. |
 | `defold_stop` | Stop the editor launched by this server (best-effort). |
 | `defold_clean_build` | Clean build: delete artifacts and recompile. |
 | `defold_hot_reload` | Hot-reload: reload modified files into the running game. |
