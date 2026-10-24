@@ -150,22 +150,57 @@ capture offset is applied internally by the tools.
 
 ## Installation
 
-The server lives in a shared folder (a sibling of your projects), e.g.
-`C:\GAMEDEV\DEFOLD\defold-mcp`:
+### Requirements
+
+| Component | Needed for | Notes |
+|---|---|---|
+| **Python 3** (e.g. 3.12+) | server venv + GUI helper | Two interpreters are involved: the venv running `server.py`, and an external Python running `tools/editor_gui.py` (`editor_*` tools) |
+| **`mcp>=1.2.0`** | all tools | installed in the server venv via `requirements.txt` |
+| **Defold editor** | all `defold_*` tools | discovered via `%LOCALAPPDATA%\Defold\installations.json`, then common locations, then `PATH` |
+| **Automation Bridge v2** extension | `defold_bridge_*`, `defold_screenshot`, `defold_inject_input` | installed *in the project* (step 4); everything else works without it |
+| **`mss`, `pyautogui`, `Pillow`, `pywinauto`** | all 5 `editor_*` tools | in an external Python interpreter (auto-detected; override with `DEFOLD_EDITOR_PYTHON`) - *not* the server venv |
+| **[Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki)** binary | `editor_find` only | called directly by the helper (e.g. `C:\Program Files\Tesseract-OCR\tesseract.exe`); no `PATH` entry needed |
+
+### Step-by-step (typical Windows setup)
+
+**1. Clone the server once, in a shared folder outside any project:**
 
 ```bash
+git clone https://github.com/vinnie035/Defold-MCP.git C:\GAMEDEV\DEFOLD\defold-mcp
 cd C:\GAMEDEV\DEFOLD\defold-mcp
+```
+
+**2. Create and fill the server venv:**
+
+```bash
 python -m venv .venv
-.venv\Scripts\activate        # Windows
+.venv\Scripts\activate        # Windows (macOS/Linux: source .venv/bin/activate)
 pip install -r requirements.txt
 ```
 
-Optionally create `active_project.txt` with the path to your current project
-(used as a fallback when no editor is open):
+**3. Optional - editor GUI automation (`editor_*`), one-time setup:**
+
+Install the four packages in a *system* Python interpreter (the server auto-detects it, e.g. `%LOCALAPPDATA%\Programs\Python\Python313`; override with `DEFOLD_EDITOR_PYTHON`):
+
+```bash
+pip install mss pyautogui pillow pywinauto
+```
+
+For `editor_find`, also install [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki) (e.g. `winget install UB-Mannheim.TesseractOCR`). The helper finds `tesseract.exe` in its standard location - no `PATH` entry needed.
+
+**4. Optional - runtime game control, per project:**
+
+Install the official [`automation-bridge`](https://github.com/defold/extension-automation-bridge) extension into your project (editor menu *Project ▸ Add Extension…*), then rebuild. This unlocks all `defold_bridge_*` tools plus `defold_screenshot` / `defold_inject_input`.
+
+**5. Optional - `active_project.txt`:**
+
+Create a plain-text file next to `server.py` containing the absolute path of your current project (fallback when no editor is open):
 
 ```
 C:\GAMEDEV\DEFOLD\MyGameProject
 ```
+
+It is gitignored because it holds a machine-specific path.
 
 ## Configuration
 
