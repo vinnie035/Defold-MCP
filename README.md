@@ -125,6 +125,28 @@ machine-specific absolute path.
 | `defold_bridge_metal` | Metal GPU trace (macOS only). |
 | `defold_bridge_metal_status` | Metal trace status. |
 | `defold_bridge_metal_stop` | Stop the Metal trace. |
+### Editor GUI automation (`editor_*`, OS level)
+
+No native editor API exists for driving the UI, so these tools automate the
+editor **window** at the OS level: `mss` capture (DPI-aware) → two-pass
+Tesseract OCR (full page + a dedicated low-contrast menu-bar pass, so the
+File/Edit/View/Project/Debug/Help menu is readable) → `pyautogui` via
+SendInput. All coordinates are **relative to the captured window**; the
+capture offset is applied internally by the tools.
+
+| Tool | Purpose |
+|---|---|
+| `editor_screenshot` | Capture the editor window: PNG + metadata (title, size px, capture offset, foreground status). Optional `save_path`. |
+| `editor_find` | OCR the window and locate UI text (`grep` substring filter, case-insensitive; `max_words=50`). Each word carries its bounding box + center in window-relative pixels. |
+| `editor_click` | Click at a window-relative pixel coordinate (same space as `editor_find` boxes). `button="left"`, `double=false`. |
+| `editor_type` | Type text into the focused control using SendInput scan codes (keyboard-layout independent). Click the target field first. |
+| `editor_key` | Press a key or chord: `"F5"`, `"Escape"`, `"ctrl+s"`, `"shift+tab"`. |
+
+**Workflow rules:**
+- Loop: `editor_find` → act (`editor_click` / `editor_type` / `editor_key`) → **re-run `editor_find` to validate the result**.
+- Do not move the real mouse manually while a tool call is in flight.
+- `editor_type` types into whatever control has focus — click it first with `editor_click`.
+
 
 ## Installation
 

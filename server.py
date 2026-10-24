@@ -22,6 +22,8 @@ from __future__ import annotations
 import base64
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Optional
 
@@ -993,6 +995,180 @@ def defold_bridge_metal_stop() -> str:
     client = _client()
     result = _safe(client.bridge_metal_stop)
     return json.dumps(result, indent=2, default=str)
+
+
+# Phase B: wrap tools/editor_gui.py (pyautogui/pywinauto/mss/Tesseract OCR) as MCP
+# tools. The subprocess runs under a system Python that has the GUI packages;
+# this venv does not need them. Override with DEFOLD_EDITOR_PYTHON if required.
+
+_EDITOR_GUI_PYTHON: Optional[str] = None
+
+
+def _editor_gui_python() -> str:
+    """Find a Python interpreter with mss+pyautogui (cached)."""
+    global _EDITOR_GUI_PYTHON
+    if _EDITOR_GUI_PYTHON is not None:
+        return _EDITOR_GUI_PYTHON
+    env = os.environ.get("DEFOLD_EDITOR_PYTHON")
+    candidates = [c for c in ([env, sys.executable, "python", "py"]) if c]
+    seen = set()
+    for cand in candidates:
+        if cand in seen:
+            continue
+        seen.add(cand)
+        try:
+            probe = subprocess.run(
+                [cand, "-c", "import mss, pyautogui"],
+                capture_output=True, timeout=15,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if probe.returncode == 0:
+            _EDITOR_GUI_PYTHON = cand
+            return cand
+    raise DefoldError(
+        "No Python interpreter with mss+pyautogui found. Point DEFOLD_EDITOR_PYTHON "
+        "at the system python that runs tools/editor_gui.py."
+    )
+
+
+def _run_editor_gui(args: list) -> dict:
+    """Run a tools/editor_gui.py subcommand and return its JSON payload."""
+    py = _editor_gui_python()
+    script = Path(__file__).resolve().parents[1] / "editor_gui.py"
+    if not script.exists():  # fallback: canonical Phase A helper
+        fb = Path("C:/GAMEDEV/DEFOLD/TrickyChallenge/tools/editor_gui.py")
+        if fb.exists():
+            script = fb
+    try:
+        proc = subprocess.run(
+            [py, str(script), *args], capture_output=True, text=True, timeout=180
+        )
+    except subprocess.TimeoutExpired as e:
+        raise DefoldError(f"editor_gui {' '.join(args)} timed out") from e
+    stdout = proc.stdout.strip()
+    if not stdout:
+        raise DefoldError(
+            f"editor_gui {' '.join(args)} produced no output (rc={proc.returncode}); "
+            f"stderr={proc.stderr[-500:]}"
+        )
+    try:
+        return json.loads(stdout)
+    except json.JSONDecodeError as e:
+        raise DefoldError(f"editor_gui {' '.join(args)} returned invalid JSON: {stdout[:300]}") from e
+
+
+@mcp.tool()
+def editor_screenshot(save_path: str = "") -> list:
+    """Capture a screenshot of the Defold editor window (OS level).
+
+    Returns a PNG image plus metadata: window title, size in pixels, capture
+    offset and foreground status. Coordinates reported by editor_find are
+    relative to this captured window; pass them straight to editor_click.
+
+    Optional ``save_path`` also writes the PNG to that file on disk.
+    """
+    import tempfile
+
+    tmp_dir = tempfile.mkdtemp(prefix="defold_gui_")
+    out_png = str(Path(tmp_dir) / "shot.png")
+    result = _run_editor_gui(["screenshot", "--out", out_png])
+    if not result.get("ok"):
+        return [TextContent(type="text", text=json.dumps({"success": False, **result}, ensure_ascii=True))]
+    with open(out_png, "rb") as f:
+        png = f.read()
+    meta = {
+        "window_title": result.get("window_title"),
+        "size": result.get("size"),
+        "offset": result.get("offset"),
+        "foreground": result.get("foreground"),
+    }
+    if save_path:
+        try:
+            target = Path(save_path).expanduser().resolve()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(png)
+            meta["saved_to"] = str(target)
+        except OSError as e:
+            meta["save_error"] = str(e)
+    blocks = [TextContent(type="text", text=json.dumps(meta, indent=2, ensure_ascii=True))]
+    blocks.append(
+        ImageContent(
+            type="image",
+            data=base64.b64encode(png).decode("ascii"),
+            mimeType="image/png",
+        )
+    )
+    return blocks
+
+
+@mcp.tool()
+def editor_find(grep: Optional[str] = None, max_words: int = 50) -> str:
+    """OCR the Defold editor window and locate UI text (OS level).
+
+    Two-pass Tesseract OCR (full page + dedicated low-contrast menu bar pass),
+    so it also reads the File/Edit/View/Project/Debug/Help menu. ``grep`` filters
+    words containing this substring (case-insensitive); omit it to list up to
+    ``max_words`` words. Each word carries its bounding box and center in
+    window-relative pixels - pass that center to editor_click.
+
+    Always re-run this after every action to validate the result.
+    """
+    args = ["ocr", "--max", str(max(1, int(max_words)))]
+    if grep:
+        args += ["--grep", grep]
+    try:
+        result = _run_editor_gui(args)
+    except DefoldError as e:
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=True)
+    return json.dumps(result, indent=2, default=str, ensure_ascii=True)
+
+
+@mcp.tool()
+def editor_click(x: int, y: int, button: str = "left", double: bool = False) -> str:
+    """Click at a window-relative pixel coordinate in the Defold editor (OS level).
+
+    ``x``/``y`` are pixels relative to the captured Defold window (the same space
+    as editor_find bounding boxes); the offset is applied internally. Do not move
+    the mouse manually during this call; re-run editor_find afterwards to validate.
+    """
+    args = ["click", str(int(x)), str(int(y)), "--button", button]
+    if double:
+        args.append("--double")
+    try:
+        result = _run_editor_gui(args)
+    except DefoldError as e:
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=True)
+    return json.dumps(result, indent=2, default=str, ensure_ascii=True)
+
+
+@mcp.tool()
+def editor_type(text: str) -> str:
+    """Type text into the focused Defold editor control (OS level).
+
+    Uses SendInput scan codes so typing is independent of the keyboard layout.
+    Click the target field first with editor_click; re-run editor_find afterwards
+    to validate what was typed.
+    """
+    try:
+        result = _run_editor_gui(["type", text])
+    except DefoldError as e:
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=True)
+    return json.dumps(result, indent=2, default=str, ensure_ascii=True)
+
+
+@mcp.tool()
+def editor_key(combo: str) -> str:
+    """Press a key or chord in the Defold editor (OS level).
+
+    ``combo`` examples: "F5", "Escape", "ctrl+s", "shift+tab". Re-run
+    editor_find afterwards to validate the effect.
+    """
+    try:
+        result = _run_editor_gui(["key", combo])
+    except DefoldError as e:
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=True)
+    return json.dumps(result, indent=2, default=str, ensure_ascii=True)
 
 
 if __name__ == "__main__":
