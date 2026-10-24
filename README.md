@@ -206,6 +206,14 @@ adjust the paths to your install location.
   `%LOCALAPPDATA%\Defold\installations.json` (`launcherPath` field), then
   common locations, then the `PATH`. Launching waits for the creation of
   `.internal/editor.port` and then for the `/openapi.json` response.
+- **Editor GUI automation dependencies**: the `editor_*` tools run
+  `tools/editor_gui.py` under an external Python interpreter (auto-detected;
+  override with `DEFOLD_EDITOR_PYTHON`) that must have `mss`, `pyautogui`,
+  `Pillow` and `pywinauto` installed (`pip install mss pyautogui pillow
+  pywinauto`). `editor_find` additionally requires the [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki)
+  binary on the system: the helper calls `tesseract.exe` directly (e.g.
+  `C:\Program Files\Tesseract-OCR\tesseract.exe`), so it does not need to be
+  in the `PATH`.
 
 ## Tests (without Defold installed)
 
