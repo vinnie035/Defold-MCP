@@ -666,7 +666,7 @@ def _resolve_bob(download: bool = True) -> Path:
 def _run_bob(java_exe: str, bob_jar: Path, project: Path, options: list, commands: list) -> tuple:
     """Run ``java -jar bob.jar <options> <commands>``; returns (rc, stdout+stderr)."""
     cmd = [java_exe, "-jar", str(bob_jar), "--root", str(project)] + options + commands
-    p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=1800)
+    p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=1800, cwd=str(project))
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
@@ -740,7 +740,7 @@ def defold_editor_command(op: str, params: dict | None = None) -> str:
 def defold_bob_build(settings_name: str = "", settings_file: str = "", target_platform: str = "") -> str:
     """Headless bob ``resolve build`` without the Defold editor.
 
-    Runs ``java -jar bob.jar --root <project> [--settings NAME FILE]
+    Runs ``java -jar bob.jar --root <project> [--settings FILE]
     [--platform X] --build-report-json <artifact> resolve build`` and parses
     the official JSON build report (not just the exit status). Bob resolves
     from ``DEFOLD_MCP_BOB``, a Defold install, or ``.cache/bob/``; java >= 25
@@ -760,10 +760,12 @@ def defold_bob_build(settings_name: str = "", settings_file: str = "", target_pl
         bob_jar = _resolve_bob()
         project = Path(_default_project())
         options = ["--build-report-json", str(report_path)]
-        if settings_name and settings_file:
-            options += ["--settings", settings_name, settings_file]
-        elif bool(settings_name) != bool(settings_file):
-            issues.append("Provide both settings_name and settings_file (or neither).")
+        if settings_file:
+            options += ["--settings", settings_file]
+        elif settings_name:
+            issues.append(
+                "Provide settings_file: Bob takes a single `--settings <file>` path;"
+                " settings_name alone cannot be resolved.")
             return _result("error", issues, artifacts)
         if target_platform:
             options += ["--platform", target_platform]
@@ -800,12 +802,12 @@ def defold_bob_bundle(target_platform: str, settings_name: str = "", settings_fi
 
     Reference shape from the Defold manual::
 
-      java -jar bob.jar --root . --settings test /test.settings \
+      java -jar bob.jar --root . --settings test/test.settings \
         --platform x86_64-linux --variant headless --archive \
         --bundle-output <dir> resolve build bundle
 
-    ``settings_name``/``settings_file`` pass a custom settings file (e.g. the
-    CI-only ``/test.settings``). Output goes to ``ai_work/artifacts/<run-id>/bundle``
+    ``settings_file`` is passed as Bob's single ``--settings <file>`` argument
+    (Bob has no name/file pair); e.g. the CI-only ``test/test.settings``. Output goes to ``ai_work/artifacts/<run-id>/bundle``
     by default; the JSON build report is also captured and parsed.
 
     Verification before reporting ok: exit code 0, parseable report, and at
@@ -827,10 +829,12 @@ def defold_bob_bundle(target_platform: str, settings_name: str = "", settings_fi
                    "--bundle-output", str(bundle_out)]
         if archive:
             options.append("--archive")
-        if settings_name and settings_file:
-            options += ["--settings", settings_name, settings_file]
-        elif bool(settings_name) != bool(settings_file):
-            issues.append("Provide both settings_name and settings_file (or neither).")
+        if settings_file:
+            options += ["--settings", settings_file]
+        elif settings_name:
+            issues.append(
+                "Provide settings_file: Bob takes a single `--settings <file>` path;"
+                " settings_name alone cannot be resolved.")
             return _result("error", issues, artifacts)
         rc, log = _run_bob(java_exe, bob_jar, project, options, ["resolve", "build", "bundle"])
     except DefoldError as e:
