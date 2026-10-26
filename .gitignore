@@ -26,3 +26,6 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# AI working files (temp scripts, smoke tests, artifacts)
+ai_work/
