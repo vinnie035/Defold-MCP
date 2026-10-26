@@ -681,6 +681,61 @@ def _parse_build_report(path: Path) -> Optional[dict]:
         return None
 
 
+def _editor_command_names(client) -> list:
+    """Command names discovered from the editor's /openapi.json spec."""
+    try:
+        spec = client.openapi() or {}
+    except DefoldError:
+        return []
+    paths = spec.get("paths") or {}
+    return sorted(p[len("/command/"):] for p in paths if isinstance(p, str) and p.startswith("/command/"))
+
+
+@tool("modify")
+def defold_editor_command(op: str, params: dict | None = None) -> str:
+    """Generic editor command dispatcher for any ``/command/*`` endpoint.
+
+    ``op`` is a command name (e.g. ``"compile"``, ``"run"``); the full path
+    ``"/command/run"`` also works. Available names are discovered at runtime
+    from the editor's OpenAPI spec (GET /openapi.json), so new editor commands
+    become usable without updating this server. ``params`` is sent as the JSON
+    request body and validated by the editor itself; omit it for no-arg commands.
+
+    Deterministic verification: status "ok" requires HTTP 200 from
+    POST /command/<op>; any other response puts the editor's payload in
+    ``issues[]`` with status "error". On success the editor's JSON body is
+    returned under ``response``. No artifacts are produced.
+    """
+    try:
+        client = _client()
+    except DefoldError as e:
+        return _result("error", [str(e)])
+    name = (op or "").strip()
+    if name.startswith("/command/"):
+        name = name[len("/command/"):]
+    name = name.strip("/")
+    names = _editor_command_names(client)
+    if not name:
+        avail = f" Available: {', '.join(names)}" if names else ""
+        return _result("error", ["Empty command name." + avail])
+    data = params if isinstance(params, dict) else {}
+    unknown_hint = ""
+    if names and name not in names:
+        unknown_hint = f" Unknown command '{name}'. Available: {', '.join(names)}"
+    result = _safe(client._post_command, name, data)
+    if isinstance(result, dict) and result.get("success") is False:
+        return _result("error", [str(result.get("error")) + unknown_hint])
+    status_code = (result or {}).get("_http_status") if isinstance(result, dict) else None
+    if status_code != 200:
+        msg = json.dumps(result, default=str)[:1500]
+        extra = []
+        if name not in names and names:
+            extra.append(f"Unknown command '{name}'. Available: {', '.join(names)}")
+        return _result("error", extra + [msg])
+    payload = {k: v for k, v in (result or {}).items() if k != "_http_status"}
+    return json.dumps({"status": "ok", "issues": [], "artifacts": {}, "response": payload}, indent=2, default=str)
+
+
 @tool("modify")
 def defold_bob_build(settings_name: str = "", settings_file: str = "", target_platform: str = "") -> str:
     """Headless bob ``resolve build`` without the Defold editor.

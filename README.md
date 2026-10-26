@@ -84,6 +84,7 @@ machine-specific absolute path.
 | `defold_bob_doctor` | Headless build prerequisites: java >= 25, bob.jar. Read-only, never downloads. |
 | `defold_bob_build` | Headless `bob resolve build` without the editor; JSON build report + artifacts. |
 | `defold_bob_bundle` | Headless `bob bundle` (archives under `ai_work/artifacts/<run-id>/`). |
+| `defold_editor_command` | Generic editor command: any `/command/*` endpoint discovered at runtime from the live `/openapi.json`, optional JSON params. |
 | `defold_engine_info` | `/ping`, `/info`, `/state` of the running game. |
 | `defold_screenshot` ⚠️ | **Runtime** capture via the *Automation Bridge v2* extension (optional `after_frames`). |
 | `defold_inject_input` ⚠️ | Inject a mouse click via the *Automation Bridge v2*. |
@@ -239,6 +240,8 @@ reporting `status: "ok"`. Artifacts (screenshots, diffs, logs) are written under
 Headless documentation: `defold_docs` searches the official llms.txt indexes (manuals, apis, examples), caches them in `.cache/defold-docs/` for 24 h, and fetches a single targeted Markdown page. `defold_ref` transparently falls back to it when the editor is unreachable.
 
 Headless builds: `defold_bob_build` / `defold_bob_bundle` run Bob directly (`java -jar bob.jar`) without the editor, placing `--build-report-json` before `resolve build`. Java >= 25 and bob.jar resolve from `DEFOLD_MCP_JAVA` / `DEFOLD_MCP_BOB`, a local Defold install, then `.cache/java/` + `.cache/bob/` (auto-downloaded once). Build artifacts land in `ai_work/artifacts/<run-id>/`. `defold_bob_doctor` reports what would be used without downloading.
+
+Dynamic commands: `defold_editor_command(op, params)` exposes every `/command/*` endpoint listed by the editor's live `/openapi.json`; an unknown name fails with the available list. Responses are structured `{status, issues[], artifacts{}}` like other mutative tools.
 
 ## Typical usage (by an agent)
 

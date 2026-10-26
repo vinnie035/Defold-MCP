@@ -161,7 +161,11 @@ class DefoldClient:
                     body = e.partial
                 return resp.status, body
         except urllib.error.HTTPError as e:
-            return e.code, e.read()
+            try:
+                return e.code, e.read()
+            except Exception:
+                # The peer may close the connection while sending the error body.
+                return e.code, b
         except urllib.error.URLError as e:
             raise DefoldError(f"Cannot reach {url}: {e.reason}") from e
         except http.client.IncompleteRead as e:
@@ -304,9 +308,13 @@ class DefoldClient:
             raise DefoldError(f"openapi.json: HTTP {status}")
         return self._json(body)
 
-    def _post_command(self, name: str) -> dict:
+    def _post_command(self, name: str, data: dict | None = None) -> dict:
         self.connect()
-        status, body = self._request("POST", f"/command/{name}", timeout=self.command_timeout)
+        headers = {"Content-Type": "application/json"} if data is not None else None
+        payload = json.dumps(data).encode("utf-8") if data is not None else None
+        status, body = self._request(
+            "POST", f"/command/{name}", data=payload, headers=headers, timeout=self.command_timeout
+        )
         data = self._json(body)
         if isinstance(data, dict):
             data["_http_status"] = status

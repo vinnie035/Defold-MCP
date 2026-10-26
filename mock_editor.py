@@ -92,7 +92,13 @@ class EditorHandler(BaseHTTPRequestHandler):
         else:
             self._json({"error": "not found"}, 404)
 
+    def _drain_body(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        if n > 0:
+            self.rfile.read(n)
+
     def do_POST(self):
+        self._drain_body()
         p = self.path.split("?")[0]
         if p == "/command/compile":
             self._json({"success": True, "issues": []})
@@ -172,11 +178,17 @@ class EngineHandler(BaseHTTPRequestHandler):
         else:
             self._json({"error": "not found"}, 404)
 
+    def _drain_body(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        if n > 0:
+            self.rfile.read(n)
+
     def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(n) if n > 0 else b""
         p = self.path.split("?")[0]
         if p == "/automation-bridge/v1/input/click":
-            length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(length)
+            body = raw
             try:
                 data = json.loads(body.decode("utf-8"))
             except Exception:
