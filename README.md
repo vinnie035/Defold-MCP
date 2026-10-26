@@ -258,8 +258,27 @@ Dynamic commands: `defold_editor_command(op, params)` exposes every `/command/*`
 8. `defold_bridge_scene` / `defold_bridge_click` / `defold_bridge_key` — inspect and drive the game via the Automation Bridge v2.
 9. `defold_test_run` — run DefTest and collect pass/failure results.
 
+## Known limitations
+
+Documented from the full end-to-end verification (2026-10-26, Windows):
+
+- **`defold_stop` is best-effort**: it only stops editor/game processes that were
+  launched *by this MCP client*. A game started from the editor UI (or by
+  another client) cannot be stopped through the tool — close it in the editor,
+  or terminate `dmengine.exe`. The tool reports this as a structured issue.
+- **`defold_bob_bundle` platform support is Bob's**: headless bundle publishers
+  are resolved by Bob itself; an unsupported platform fails with
+  `Platform <name> not supported` (structured error + log under
+  `ai_work/artifacts/<run-id>/`). This is a toolchain limitation, not a server bug.
+- **Stale engine process**: a leftover `dmengine.exe` from a crashed run can lock
+  `build/<platform>/dmengine.exe`, making the engine-copy step of
+  `defold_bob_build` fail. Kill the stale process before rebuilding.
+
 ## Important notes
 
+- **Last full verification (2026-10-26)**: all 64 tools exercised end-to-end
+  against a live editor + running game on Windows (Automation Bridge v2). The
+  two environment-dependent caveats are in [Known limitations](#known-limitations).
 - **Automatic project detection**: the active project follows the Defold editor
   that is open. Close one project and open another, and the next tool call
   targets the new project — no server restart, no config change.
