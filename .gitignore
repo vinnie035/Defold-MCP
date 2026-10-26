@@ -29,3 +29,6 @@ Thumbs.db
 
 # AI working files (temp scripts, smoke tests, artifacts)
 ai_work/
+
+# Local doc cache (llms.txt indexes)
+.cache/

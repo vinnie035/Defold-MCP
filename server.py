@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import base64
 import functools
+import re
+import urllib.request
 import json
 import os
 import subprocess
@@ -450,15 +452,121 @@ def defold_preview(path: str, width: int = 1280, height: int = 720) -> list:
         return _text({"error": str(e)})
 
 
+# ------------------------------------------------------------------ #
+# Headless documentation (official llms.txt indexes)
+# ------------------------------------------------------------------ #
+_DOCS_CACHE_DIR = Path(__file__).resolve().parent / ".cache" / "defold-docs"
+_DOCS_INDEXES = {
+    "manuals": "https://www.defold.com/llms/manuals.md",
+    "apis": "https://www.defold.com/llms/apis.md",
+    "examples": "https://www.defold.com/llms/examples.md",
+}
+_DOCS_TTL = 24 * 3600
+
+
+def _docs_index(name: str) -> str:
+    """Fetch one llms index (TTL 24 h cache in ``.cache/defold-docs/``)."""
+    _DOCS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    f = _DOCS_CACHE_DIR / ("llms-" + name + ".md")
+    fresh = f.exists() and (time.time() - f.stat().st_mtime) < _DOCS_TTL
+    if not fresh:
+        req = urllib.request.Request(_DOCS_INDEXES[name], headers={"User-Agent": "defold-mcp/1.0"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            f.write_bytes(r.read())
+    return f.read_text(encoding="utf-8")
+
+
+def _docs_search_and_fetch(query: str, fetch: bool = True, max_chars: int = 20000, note: str = "") -> str:
+    """Resolve ``query`` against the llms indexes; optionally fetch ONE page.
+
+    Returns JSON with ``status``, ``matches[]`` (top 5), and — when fetching —
+    ``page`` + ``content`` trimmed to ``max_chars``. Only index files and a
+    single targeted .md are ever loaded (never the huge llms-*.txt blobs).
+    """
+    q = [t.lower() for t in query.split() if len(t) > 1]
+    out: dict = {"status": "ok", "query": query, "matches": [], "artifacts": {}}
+    if note:
+        out["note"] = note
+    if not q:
+        out["status"] = "error"
+        out["issues"] = ["Empty query"]
+        return json.dumps(out, indent=2)
+    cands: list = []
+    for name in _DOCS_INDEXES:
+        try:
+            text = _docs_index(name)
+        except Exception:
+            continue  # one index failing must not kill the search
+        for m in re.finditer(r"\[([^\]]+)\]\((https?://[^)\s]+\.md)\)", text):
+            title, url = m.group(1), m.group(2)
+            hay = (title + " " + url.rsplit("/", 1)[-1].replace("-", " ")).lower()
+            score = sum(t in hay for t in q)
+            if score:
+                cands.append((score, title, name, url))
+    cands.sort(key=lambda c: (-c[0], list(_DOCS_INDEXES).index(c[2])))
+    seen, uniq = set(), []
+    for sc, title, name, url in cands:
+        if url not in seen:
+            seen.add(url)
+            uniq.append((sc, title, name, url))
+    out["matches"] = [{"title": t, "index": n, "url": u} for _, t, n, u in uniq[:5]]
+    issues = []
+    if not uniq:
+        issues.append("No documentation page matched the query.")
+    elif fetch:
+        url = uniq[0][3]
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "defold-mcp/1.0"})
+            with urllib.request.urlopen(req, timeout=20) as r:
+                content = r.read().decode("utf-8", "replace")
+        except Exception as e:
+            issues.append(f"Failed to fetch {url}: {e}")
+            content = None
+        if content is not None:
+            out["page"] = {"title": uniq[0][1], "url": url, "truncated": len(content) > max_chars}
+            out["content"] = content[:max_chars]
+    if issues:
+        out["status"] = "error"
+        out["issues"] = issues
+    return json.dumps(out, indent=2)
+
+
+@tool("read")
+def defold_docs(query: str, fetch: bool = True, max_chars: int = 20000) -> str:
+    """Search Defold documentation headlessly (no editor required).
+
+    Resolves the query against the official llms.txt indexes (manuals, apis,
+    examples), cached in ``.cache/defold-docs/`` for 24 h, then fetches ONE
+    targeted .md page (the best match) trimmed to ``max_chars`` characters.
+    With ``fetch=False`` only the candidate list is returned.
+
+    Version note: llms docs track the latest Defold release; ``defold_ref``
+    matches the exact build of the running editor.
+    """
+    return _docs_search_and_fetch(query, fetch=fetch, max_chars=max_chars)
+
+
 @tool("read")
 def defold_ref(query: str, environment: str = "runtime", language: str = "Lua") -> str:
     """Search the Defold API documentation bundled with the running editor.
 
     ``query`` uses whitespace as AND and ``|`` as OR. ``environment``:
     editor|runtime (comma-separated). ``language``: Lua|C|C++ (comma-separated).
+
+    Fallback: if the editor is unreachable, transparently falls back to the
+    headless ``defold_docs`` search (latest release docs, not this build).
     """
-    client = _client()
-    result = _safe(client.ref, query, environment, language)
+    try:
+        client = _client()
+        result = _safe(client.ref, query, environment, language)
+    except DefoldError:
+        return _docs_search_and_fetch(
+            query, note="Editor unreachable; fell back to headless llms docs (latest release)."
+        )
+    if isinstance(result, dict) and result.get("success") is False:
+        return _docs_search_and_fetch(
+            query, note="Editor unreachable; fell back to headless llms docs (latest release)."
+        )
     return json.dumps(result, indent=2, default=str)
 
 

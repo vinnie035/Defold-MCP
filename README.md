@@ -79,7 +79,8 @@ machine-specific absolute path.
 | `defold_run` | Compile + run (debug build). |
 | `defold_console` | Read the logs (latest lines + semantic regions). |
 | `defold_preview` | Render a resource (collection, GUI, atlas…) as a **PNG**. |
-| `defold_ref` | Search the API docs embedded in the editor. |
+| `defold_ref` | Search the API docs embedded in the editor (falls back to headless docs if unreachable). |
+| `defold_docs` | Headless Defold docs search via official llms.txt indexes (no editor needed). |
 | `defold_engine_info` | `/ping`, `/info`, `/state` of the running game. |
 | `defold_screenshot` ⚠️ | **Runtime** capture via the *Automation Bridge v2* extension (optional `after_frames`). |
 | `defold_inject_input` ⚠️ | Inject a mouse click via the *Automation Bridge v2*. |
@@ -232,6 +233,7 @@ Mutative operations (`defold_run`, `defold_open_project`, `defold_stop`,
 reporting `status: "ok"`. Artifacts (screenshots, diffs, logs) are written under
 `ai_work/artifacts/<run-id>/`.
 
+Headless documentation: `defold_docs` searches the official llms.txt indexes (manuals, apis, examples), caches them in `.cache/defold-docs/` for 24 h, and fetches a single targeted Markdown page. `defold_ref` transparently falls back to it when the editor is unreachable.
 
 ## Typical usage (by an agent)
 
