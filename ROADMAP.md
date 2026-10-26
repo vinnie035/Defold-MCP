@@ -8,8 +8,9 @@ Plan d'évolution consolidé à partir de 4 sources :
 
 > ChadAragorn/defold-mcp : rejeté (single-file, superficiel, aucun élément unique — le scaffolding de fichiers se couvre déjà par écriture directe).
 
-> **Statut (2026-10-26)** : P0–P7 ✅ (commits `32bc660` → `80dafec`, + fix Bob `7f66971`) — 57 → 64 outils, smoke test OK.
-> P8 en cours : fichiers côté TrickyChallenge en place (test collection, settings, runner auto-suffisant, bridge publish) ; **blocage** : crash Bob (`StringIndexOutOfBoundsException` dans `ComponentsCounter.isFactoryType`) quand le bootstrap pointe sur `/test/test.collectionc`. Acceptation CI pas encore validée.
+> **Statut (2026-10-26)** : P0–P8 ✅ — 57 → 64 outils, smoke test OK.
+> P8 validé end-to-end : build headless `test/settings` OK (15 ressources, 0 échec), bundle x86_64-win32 exécuté headless (exit 0), 11/11 tests `TEST {json}` avec run id, finish `pass`.
+> Crash Bob résolu : `test/test.collection` référençait un composant inexistant (`/test/script`) → extension vide → `StringIndexOutOfBoundsException` dans `ComponentsCounter.isFactoryType`. Fix : référence vers `/test/test.script`.
 
 ## État actuel (baseline)
 
@@ -86,7 +87,7 @@ Le manuel recommande de séparer **read / verification / modification / privileg
 - [x] Résolution de bob : utiliser le bob de l'install Defold existante si présente, sinon cache par version dans `.cache/bob/` (approach Fulviuus) — JRE 25 + bob.jar mis en cache dans `.cache/java` / `.cache/bob`
 - [x] `defold_bob_doctor` : java + bob + extender détectés
 
-**Acceptation** : build CI reproductible **sans éditeur** ; le report JSON est exposé dans la réponse. ✅ (commits `cf522bc`, `7f66971`) — reste à valider sur bootstrap de test (voir P8).
+**Acceptation** : build CI reproductible **sans éditeur** ; le report JSON est exposé dans la réponse. ✅ (commits `cf522bc`, `7f66971`) — validé sur bootstrap de test TrickyChallenge (P8) : 15 ressources, 0 échec.
 
 ---
 
@@ -120,20 +121,20 @@ TEST {"run":"8f13","event":"suite_end","status":"pass","passed":2,"failed":0}
 - [x] Outil `defold_test_run(run_id?, timeout?)` : lancer/poller la console (et/ou événements bridge) jusqu'à l'événement final du run id ; couper sur completion / process terminé / erreur / timeout + limite de lignes ; ignorer le bruit engine
 - [x] Résultat structuré : `{run, status, passed, failed, cases[], log_path}`
 
-**Acceptation** : une suite de tests donne un verdict déterministe sans lecture libre des logs. ✅ (commit `80dafec`) — reste à valider end-to-end sur TrickyChallenge (voir P8).
+**Acceptation** : une suite de tests donne un verdict déterministe sans lecture libre des logs. ✅ (commit `80dafec`) — validé end-to-end sur TrickyChallenge (P8) : 11/11 pass, run id présent sur chaque événement.
 
 ---
 
-## Phase 8 — Côté projet TrickyChallenge *(source : automated-testing + ai-agents AGENTS.md)* 🚧
+## Phase 8 — Côté projet TrickyChallenge *(source : automated-testing + ai-agents AGENTS.md)* ✅
 
 - [x] Exposer les `automation_id` sur les éléments interactifs + publier l'état d'application (`app.ui.screen`) via la Lua API debug-only du bridge (`main/scripts/menu.script`, garde `type(automation_bridge) == "table"`)
-- [x] Test collection dédiée : `/test/test.collectionc` + `test/settings` avec `[bootstrap] main_collection = /test/test.collectionc` ; **jamais** dans la config normale du repo (CI passe `--settings test/settings`) — ⚠️ build Bob avec ce bootstrap en crash (`ComponentsCounter.isFactoryType`), à corriger
+- [x] Test collection dédiée : `/test/test.collectionc` + `test/settings` avec `[bootstrap] main_collection = /test/test.collectionc` ; **jamais** dans la config normale du repo (CI passe `--settings test/settings`) — le crash Bob initial était dû à une référence de composant inexistante (`/test/script`) → extension vide, crashé `ComponentsCounter.isFactoryType` ; corrigé en pointant sur `/test/test.script`
 - [x] Intégrer les tests de modules : **décision — runner auto-suffisant `test/runner.lua`** (pas de dépendance DefTest/Telescope) ; protocole `TEST {json}` conforme P7, exit code 0/1
 - [x] Séparer logique pure (`main/logic/screen_manager.lua`, testable sans engine) du code engine-facing (`main/scripts/`)
 - [x] `[project] write_log_file = 2` dans le settings de test (logs persistés, utile device/packagé)
 - [x] Enrichir `TrickyChallenge/AGENTS.md` : structure + entry points, conventions, commandes build/test, protocole structuré, artefacts attendus (`ai_work/artifacts/`), bridge debug-only
 
-**Acceptation** : un run de test headless (Phase 4) + collecteur (Phase 7) passe en CI sans éditeur et donne un verdict structuré. 🚧 **bloqué** par le crash Bob ci-dessus.
+**Acceptation** : un run de test headless (Phase 4) + collecteur (Phase 7) passe en CI sans éditeur et donne un verdict structuré. ✅ Validé le 26/10 : build `test/settings` OK (15 ressources, 0 échec), bundle x86_64-win32 exécuté headless (exit 0), protocole `TEST {json}` complet avec run id (`949b9fec`) et finish `{status:"pass", passed:11, failed:0}`.
 
 ---
 
