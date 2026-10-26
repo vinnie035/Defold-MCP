@@ -647,8 +647,8 @@ def defold_bridge_drag_path(
     """Drag along a multi-point path.
 
     ``points`` is ``x,y`` pairs separated by semicolons, e.g.
-    ``"100,100;180,60;260,140"``. ``durations`` is per-segment seconds,
-    semicolon-separated.
+    ``"100,100;180,60;260,140"``. ``durations`` (per-segment seconds) and
+    ``easing`` are comma-separated: N-1 values for N points.
     """
     client = _client()
     result = _safe(
