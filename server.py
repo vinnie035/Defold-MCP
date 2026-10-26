@@ -942,6 +942,99 @@ def defold_screenshot(after_frames: int = 0) -> list:
 
 
 @tool("read")
+def defold_test_run(run_id: str = "", timeout: float = 90.0) -> str:
+    """Poll structured TEST events until a final result (DefTest protocol).
+
+    Protocol: DefTest emits one JSON line per console event, prefixed with ``TEST``::
+
+        TEST {"run": "<run-id>", "type": "start"}
+        TEST {"run": "<run-id>", "type": "case", "name": "...", "result": "pass" | "failure"}
+        TEST {"run": "<run-id>", "type": "finish", "status": "pass" | "failure" | "crash"}
+
+    Only events whose ``run`` field matches the active run id are considered; all
+    other console output (engine noise) is ignored. The editor is not launched by
+    this tool - start the game first (e.g. via `defold_run` with a test build).
+
+    Polls the editor console every second until: a final event arrives, the editor
+    process exits (status "crash"), ``timeout`` expires (status "timeout"), or the
+    2000-line log cap is reached.
+
+    Deterministic verification: status is one of pass|failure|crash|timeout;
+    passed/failed are counted from case events; every TEST line seen is appended
+    to the log file referenced by artifacts.log.
+    """
+    rid = (run_id or "").strip() or _new_run_id("test")
+    outdir = _artifact_dir(rid)
+    outdir.mkdir(parents=True, exist_ok=True)
+    log_path = outdir / "test.log"
+
+    client = _client()
+    deadline = time.monotonic() + min(max(timeout, 1.0), 300.0)
+    cases: list[dict] = []
+    passed = failed = 0
+    final_status: Optional[str] = None
+    log_lines = 0
+    test_re = re.compile(r"^\s*TEST\s+(\{.*\})\s*$")
+
+    while True:
+        if not client.is_running():
+            final_status = "crash"
+            break
+        console = _safe(client.console)
+        lines = console.get("lines", []) if isinstance(console, dict) else []
+        for line in lines:
+            m = test_re.match(str(line))
+            if not m:
+                continue  # engine noise
+            log_lines += 1
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(str(line).rstrip() + "\n")
+            try:
+                ev = json.loads(m.group(1))
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(ev, dict) or ev.get("run") != rid:
+                continue
+            etype = str(ev.get("type", ""))
+            if etype == "case":
+                cases.append({"name": ev.get("name"), "result": ev.get("result")})
+                res = str(ev.get("result", "")).lower()
+                if res == "pass":
+                    passed += 1
+                elif res in ("failure", "fail"):
+                    failed += 1
+            elif etype in ("finish", "done", "end", "crash", "failure"):
+                final_status = str(ev.get("status") or etype).lower()
+                if final_status == "fail":
+                    final_status = "failure"
+                break
+        if final_status is not None:
+            break
+        if log_lines >= 2000:
+            break
+        if time.monotonic() >= deadline:
+            final_status = "timeout"
+            break
+        time.sleep(1.0)
+
+    issues: list[str] = []
+    if final_status == "crash" and not cases:
+        issues.append("Editor process exited before any TEST event was seen.")
+    if final_status == "timeout":
+        issues.append(f"No final TEST event within {min(max(timeout, 1.0), 300.0):.0f}s.")
+    out = json.loads(_result("ok" if final_status in ("pass", "failure") else "error", issues, {"log": str(log_path)}))
+    out["test"] = {
+        "run": rid,
+        "status": final_status,
+        "passed": passed,
+        "failed": failed,
+        "cases": cases[:200],
+        "case_count": len(cases),
+    }
+    return json.dumps(out, indent=2, default=str)
+
+
+@tool("read")
 def defold_screenshot_diff(scene: str, baseline_path: str = "", save_baseline: bool = False, tolerance: int = 0) -> str:
     """Visually compare a runtime screenshot against a stored baseline (Pillow).
 

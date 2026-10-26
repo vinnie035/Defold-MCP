@@ -88,6 +88,7 @@ machine-specific absolute path.
 | `defold_engine_info` | `/ping`, `/info`, `/state` of the running game. |
 | `defold_screenshot` ⚠️ | **Runtime** capture via the *Automation Bridge v2* extension (optional `after_frames`). |
 | `defold_screenshot_diff` | Visual regression: runtime screenshot vs `.baselines/<scene>.png` (Pillow): % changed pixels, region bounding boxes, diff image. |
+| `defold_test_run` | DefTest collector: polls the editor console for `TEST {json}` events filtered by run-id; final status pass/failure/crash/timeout; log under `ai_work/artifacts/<run-id>/test.log`. |
 | `defold_inject_input` ⚠️ | Inject a mouse click via the *Automation Bridge v2*. |
 | `defold_stop` | Stop the editor launched by this server (best-effort). |
 | `defold_clean_build` | Clean build: delete artifacts and recompile. |
@@ -243,6 +244,7 @@ Headless documentation: `defold_docs` searches the official llms.txt indexes (ma
 Headless builds: `defold_bob_build` / `defold_bob_bundle` run Bob directly (`java -jar bob.jar`) without the editor, placing `--build-report-json` before `resolve build`. Java >= 25 and bob.jar resolve from `DEFOLD_MCP_JAVA` / `DEFOLD_MCP_BOB`, a local Defold install, then `.cache/java/` + `.cache/bob/` (auto-downloaded once). Build artifacts land in `ai_work/artifacts/<run-id>/`. `defold_bob_doctor` reports what would be used without downloading.
 
 Dynamic commands: `defold_editor_command(op, params)` exposes every `/command/*` endpoint listed by the editor's live `/openapi.json`; an unknown name fails with the available list. Responses are structured `{status, issues[], artifacts{}}` like other mutative tools.
+**Test protocol**: `defold_test_run(run_id, timeout)` collects DefTest results emitted as one JSON line per console event (`TEST {json}`), filtered by run id; engine noise is ignored and the log is capped at 2000 lines. Final status: `pass`, `failure`, `crash` (process exited before a final event) or `timeout`. Collected events go to `ai_work/artifacts/<run-id>/test.log`.
 
 ## Typical usage (by an agent)
 
@@ -254,6 +256,7 @@ Dynamic commands: `defold_editor_command(op, params)` exposes every `/command/*`
 6. `defold_screenshot` / `defold_preview` — see the visual state.
 7. `defold_inject_input` — interact.
 8. `defold_bridge_scene` / `defold_bridge_click` / `defold_bridge_key` — inspect and drive the game via the Automation Bridge v2.
+9. `defold_test_run` — run DefTest and collect pass/failure results.
 
 ## Important notes
 
