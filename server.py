@@ -1841,12 +1841,12 @@ def _run_editor_gui(args: list) -> dict:
 
 
 @tool("read")
-def editor_screenshot(save_path: str = "") -> list:
+def defold_editor_screenshot(save_path: str = "") -> list:
     """Capture a screenshot of the Defold editor window (OS level).
 
     Returns a PNG image plus metadata: window title, size in pixels, capture
-    offset and foreground status. Coordinates reported by editor_find are
-    relative to this captured window; pass them straight to editor_click.
+    offset and foreground status. Coordinates reported by defold_editor_find are
+    relative to this captured window; pass them straight to defold_editor_click.
 
     Optional ``save_path`` also writes the PNG to that file on disk.
     """
@@ -1885,14 +1885,14 @@ def editor_screenshot(save_path: str = "") -> list:
 
 
 @tool("read")
-def editor_find(grep: Optional[str] = None, max_words: int = 50) -> str:
+def defold_editor_find(grep: Optional[str] = None, max_words: int = 50) -> str:
     """OCR the Defold editor window and locate UI text (OS level).
 
     Two-pass Tesseract OCR (full page + dedicated low-contrast menu bar pass),
     so it also reads the File/Edit/View/Project/Debug/Help menu. ``grep`` filters
     words containing this substring (case-insensitive); omit it to list up to
     ``max_words`` words. Each word carries its bounding box and center in
-    window-relative pixels - pass that center to editor_click.
+    window-relative pixels - pass that center to defold_editor_click.
 
     Always re-run this after every action to validate the result.
     """
@@ -1907,12 +1907,12 @@ def editor_find(grep: Optional[str] = None, max_words: int = 50) -> str:
 
 
 @tool("modify")
-def editor_click(x: int, y: int, button: str = "left", double: bool = False) -> str:
+def defold_editor_click(x: int, y: int, button: str = "left", double: bool = False) -> str:
     """Click at a window-relative pixel coordinate in the Defold editor (OS level).
 
     ``x``/``y`` are pixels relative to the captured Defold window (the same space
-    as editor_find bounding boxes); the offset is applied internally. Do not move
-    the mouse manually during this call; re-run editor_find afterwards to validate.
+    as defold_editor_find bounding boxes); the offset is applied internally. Do not move
+    the mouse manually during this call; re-run defold_editor_find afterwards to validate.
     """
     args = ["click", str(int(x)), str(int(y)), "--button", button]
     if double:
@@ -1925,11 +1925,11 @@ def editor_click(x: int, y: int, button: str = "left", double: bool = False) -> 
 
 
 @tool("modify")
-def editor_type(text: str) -> str:
+def defold_editor_type(text: str) -> str:
     """Type text into the focused Defold editor control (OS level).
 
     Uses SendInput scan codes so typing is independent of the keyboard layout.
-    Click the target field first with editor_click; re-run editor_find afterwards
+    Click the target field first with defold_editor_click; re-run defold_editor_find afterwards
     to validate what was typed.
     """
     try:
@@ -1940,11 +1940,11 @@ def editor_type(text: str) -> str:
 
 
 @tool("modify")
-def editor_key(combo: str) -> str:
+def defold_editor_key(combo: str) -> str:
     """Press a key or chord in the Defold editor (OS level).
 
     ``combo`` examples: "F5", "Escape", "ctrl+s", "shift+tab". Re-run
-    editor_find afterwards to validate the effect.
+    defold_editor_find afterwards to validate the effect.
     """
     try:
         result = _run_editor_gui(["key", combo])

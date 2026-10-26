@@ -132,7 +132,7 @@ machine-specific absolute path.
 | `defold_bridge_metal` | Metal GPU trace (macOS only). |
 | `defold_bridge_metal_status` | Metal trace status. |
 | `defold_bridge_metal_stop` | Stop the Metal trace. |
-### Editor GUI automation (`editor_*`, OS level)
+### Editor GUI automation (`defold_editor_*`, OS level)
 
 No native editor API exists for driving the UI, so these tools automate the
 editor **window** at the OS level: `mss` capture (DPI-aware) → two-pass
@@ -143,16 +143,16 @@ capture offset is applied internally by the tools.
 
 | Tool | Purpose |
 |---|---|
-| `editor_screenshot` | Capture the editor window: PNG + metadata (title, size px, capture offset, foreground status). Optional `save_path`. |
-| `editor_find` | OCR the window and locate UI text (`grep` substring filter, case-insensitive; `max_words=50`). Each word carries its bounding box + center in window-relative pixels. |
-| `editor_click` | Click at a window-relative pixel coordinate (same space as `editor_find` boxes). `button="left"`, `double=false`. |
-| `editor_type` | Type text into the focused control using SendInput scan codes (keyboard-layout independent). Click the target field first. |
-| `editor_key` | Press a key or chord: `"F5"`, `"Escape"`, `"ctrl+s"`, `"shift+tab"`. |
+| `defold_editor_screenshot` | Capture the editor window: PNG + metadata (title, size px, capture offset, foreground status). Optional `save_path`. |
+| `defold_editor_find` | OCR the window and locate UI text (`grep` substring filter, case-insensitive; `max_words=50`). Each word carries its bounding box + center in window-relative pixels. |
+| `defold_editor_click` | Click at a window-relative pixel coordinate (same space as `defold_editor_find` boxes). `button="left"`, `double=false`. |
+| `defold_editor_type` | Type text into the focused control using SendInput scan codes (keyboard-layout independent). Click the target field first. |
+| `defold_editor_key` | Press a key or chord: `"F5"`, `"Escape"`, `"ctrl+s"`, `"shift+tab"`. |
 
 **Workflow rules:**
-- Loop: `editor_find` → act (`editor_click` / `editor_type` / `editor_key`) → **re-run `editor_find` to validate the result**.
+- Loop: `defold_editor_find` → act (`defold_editor_click` / `defold_editor_type` / `defold_editor_key`) → **re-run `defold_editor_find` to validate the result**.
 - Do not move the real mouse manually while a tool call is in flight.
-- `editor_type` types into whatever control has focus — click it first with `editor_click`.
+- `defold_editor_type` types into whatever control has focus — click it first with `defold_editor_click`.
 
 
 ## Installation
@@ -161,12 +161,12 @@ capture offset is applied internally by the tools.
 
 | Component | Needed for | Notes |
 |---|---|---|
-| **Python 3** (e.g. 3.12+) | server venv + GUI helper | Two interpreters are involved: the venv running `server.py`, and an external Python running `tools/editor_gui.py` (`editor_*` tools) |
+| **Python 3** (e.g. 3.12+) | server venv + GUI helper | Two interpreters are involved: the venv running `server.py`, and an external Python running `tools/editor_gui.py` (`defold_editor_*` tools) |
 | **`mcp>=2.3.0`** | all tools | installed in the server venv via `requirements.txt` |
 | **Defold editor** | all `defold_*` tools | discovered via `%LOCALAPPDATA%\Defold\installations.json`, then common locations, then `PATH` |
 | **Automation Bridge v2** extension | `defold_bridge_*`, `defold_screenshot`, `defold_inject_input` | installed *in the project* (step 4); everything else works without it |
-| **`mss`, `pyautogui`, `Pillow`, `pywinauto`** | all 5 `editor_*` tools | in an external Python interpreter (auto-detected; override with `DEFOLD_EDITOR_PYTHON`) - *not* the server venv |
-| **[Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki)** binary | `editor_find` only | called directly by the helper (e.g. `C:\Program Files\Tesseract-OCR\tesseract.exe`); no `PATH` entry needed |
+| **`mss`, `pyautogui`, `Pillow`, `pywinauto`** | all 5 `defold_editor_*` tools | in an external Python interpreter (auto-detected; override with `DEFOLD_EDITOR_PYTHON`) - *not* the server venv |
+| **[Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki)** binary | `defold_editor_find` only | called directly by the helper (e.g. `C:\Program Files\Tesseract-OCR\tesseract.exe`); no `PATH` entry needed |
 
 ### Step-by-step (typical Windows setup)
 
@@ -185,7 +185,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-**3. Optional - editor GUI automation (`editor_*`), one-time setup:**
+**3. Optional - editor GUI automation (`defold_editor_*`), one-time setup:**
 
 Install the four packages in a *system* Python interpreter (the server auto-detects it, e.g. `%LOCALAPPDATA%\Programs\Python\Python313`; override with `DEFOLD_EDITOR_PYTHON`):
 
@@ -193,7 +193,7 @@ Install the four packages in a *system* Python interpreter (the server auto-dete
 pip install mss pyautogui pillow pywinauto
 ```
 
-For `editor_find`, also install [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki) (e.g. `winget install UB-Mannheim.TesseractOCR`). The helper finds `tesseract.exe` in its standard location - no `PATH` entry needed.
+For `defold_editor_find`, also install [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki) (e.g. `winget install UB-Mannheim.TesseractOCR`). The helper finds `tesseract.exe` in its standard location - no `PATH` entry needed.
 
 **4. Optional - runtime game control, per project:**
 
@@ -223,9 +223,9 @@ Every tool is registered with a privilege level (`ToolAnnotations`):
 
 | Level | Meaning | Tools |
 |---|---|---|
-| **read** | no side effects (`readOnlyHint=true`) | `defold_status`, `console`, `ref`, `engine_info`, `preview`, `screenshot`, all read-only `bridge_*` queries, `editor_screenshot`, `editor_find` |
+| **read** | no side effects (`readOnlyHint=true`) | `defold_status`, `console`, `ref`, `engine_info`, `preview`, `screenshot`, all read-only `bridge_*` queries, `defold_editor_screenshot`, `defold_editor_find` |
 | **verify** | runs a build/run to check state (idempotent) | `compile`, `clean_build`, `run` |
-| **modify** | changes editor/game state | `open_project`, `stop`, `hot_reload`, `inject_input`, bridge input/pointer/recording/marker/metal ops, `editor_click` / `editor_type` / `editor_key` |
+| **modify** | changes editor/game state | `open_project`, `stop`, `hot_reload`, `inject_input`, bridge input/pointer/recording/marker/metal ops, `defold_editor_click` / `defold_editor_type` / `defold_editor_key` |
 | **privileged** | arbitrary app-command dispatch (potentially destructive) | `bridge_command`, `bridge_command_cancel` |
 
 Set the env var **`DEFOLD_MCP_READONLY=1`** on the server to gate every
@@ -297,11 +297,11 @@ Documented from the full end-to-end verification (2026-10-26, Windows):
   `%LOCALAPPDATA%\Defold\installations.json` (`launcherPath` field), then
   common locations, then the `PATH`. Launching waits for the creation of
   `.internal/editor.port` and then for the `/openapi.json` response.
-- **Editor GUI automation dependencies**: the `editor_*` tools run
+- **Editor GUI automation dependencies**: the `defold_editor_*` tools run
   `tools/editor_gui.py` under an external Python interpreter (auto-detected;
   override with `DEFOLD_EDITOR_PYTHON`) that must have `mss`, `pyautogui`,
   `Pillow` and `pywinauto` installed (`pip install mss pyautogui pillow
-  pywinauto`). `editor_find` additionally requires the [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki)
+  pywinauto`). `defold_editor_find` additionally requires the [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki)
   binary on the system: the helper calls `tesseract.exe` directly (e.g.
   `C:\Program Files\Tesseract-OCR\tesseract.exe`), so it does not need to be
   in the `PATH`.
