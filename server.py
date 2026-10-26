@@ -25,6 +25,8 @@ import json
 import os
 import subprocess
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -288,6 +290,24 @@ def _safe(fn, *args, **kwargs):
         return {"success": False, "error": str(e)}
 
 
+def _result(status: str, issues=None, artifacts=None) -> str:
+    """Uniform structured result for mutative ops: ``{status, issues[], artifacts{}}``.
+
+    Artifacts (screenshots, videos, diffs, logs) are written under
+    ``ai_work/artifacts/<run-id>/`` relative to this repository.
+    """
+    return json.dumps(
+        {"status": status, "issues": list(issues or []), "artifacts": dict(artifacts or {})},
+        indent=2,
+        default=str,
+    )
+
+
+def _new_run_id(prefix: str = "run") -> str:
+    """Run id for the ``ai_work/artifacts/<run-id>/`` convention."""
+    return f"{prefix}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+
+
 @tool("read")
 def defold_status() -> str:
     """Check whether the Defold editor is installed and whether a project is open/running.
@@ -321,22 +341,26 @@ def defold_status() -> str:
 
 @tool("modify")
 def defold_open_project(launch: bool = True, port: Optional[int] = None) -> str:
-    """Connect to the Defold editor for this project.
+    """Connect to the Defold editor for this project (launching it if needed).
 
-    If the editor is already running, connect to it. If ``launch`` is True and
-    the editor is not running, start it and wait until it is reachable.
+    Returns structured JSON ``{status, issues[], artifacts{}}``.
+
+    Deterministic verification: after connecting/launching, re-probes the
+    editor with a ``/openapi.json`` request; status is "ok" only when the
+    editor answers (same probe as ``defold_status``).
     """
     client = _client()
     try:
-        if client.is_running():
-            base = client.connect()
-            return json.dumps({"connected": True, "editor_url": base, "launched": False})
-        if launch:
-            base = client.launch(port=port)
-            return json.dumps({"connected": True, "editor_url": base, "launched": True})
-        return json.dumps({"connected": False, "error": "Editor not running and launch=False"})
+        if not client.is_running():
+            if not launch:
+                return _result("error", ["Editor not running and launch=False"])
+            client.launch(port=port)
+        client.connect()
+        # Deterministic verification: editor must answer on its URL.
+        client.openapi()
     except DefoldError as e:
-        return json.dumps({"connected": False, "error": str(e)})
+        return _result("error", [str(e)])
+    return _result("ok")
 
 
 @tool("verify")
@@ -352,15 +376,44 @@ def defold_compile() -> str:
 
 
 @tool("verify")
-def defold_run() -> str:
+def defold_run(engine_timeout: int = 30) -> str:
     """Compile and run the project in the editor (debug build).
 
-    The running game exposes an engine service that can be queried for state
-    and screenshots.
+    Returns structured JSON ``{status, issues[], artifacts{}}``.
+
+    Deterministic verification: after a successful ``run``, polls the engine
+    service (port auto-discovered from the console) until ``/ping`` answers,
+    then re-reads the last console lines; status is "ok" only when the engine
+    service is reachable within ``engine_timeout`` seconds and no error line
+    appears in the recent console output. Artifacts produced by later tools
+    (screenshots, diffs, logs) go under ``ai_work/artifacts/<run-id>/``.
     """
     client = _client()
     result = _safe(client.run)
-    return json.dumps(result, indent=2, default=str)
+    if not isinstance(result, dict):
+        return _result("error", [str(result)])
+    issues: list[str] = list(result.get("issues") or [])
+    if result.get("success") is False:
+        issues.append(f"run failed: {result.get('error', 'editor run command rejected')}")
+        return _result("error", issues)
+    deadline = time.monotonic() + engine_timeout
+    while time.monotonic() < deadline:
+        try:
+            client.engine_ping()
+            break
+        except DefoldError:
+            time.sleep(1.0)
+    else:
+        issues.append(f"Engine service not reachable within {engine_timeout}s after run")
+        return _result("error", issues)
+    # Deterministic verification (2/2): re-read recent console lines for errors.
+    try:
+        console = client.console()
+        lines = [str(x) for x in (console.get("lines", []) if isinstance(console, dict) else [])]
+        issues.extend(ln for ln in lines[-5:] if "Error" in ln or "Traceback" in ln)
+    except DefoldError:
+        pass
+    return _result("ok" if not issues else "error", issues)
 
 
 @tool("read")
@@ -464,13 +517,29 @@ def defold_inject_input(x: int, y: int, button: str = "left") -> str:
 
 @tool("modify")
 def defold_stop() -> str:
-    """Best-effort stop: terminates the editor process that this MCP server
-    launched (and thus the running game). Does nothing if the editor was not
-    launched by this server session.
+    """Best-effort stop of the editor/game process launched by this MCP session.
+
+    Returns structured JSON ``{status, issues[], artifacts{}}``. Does nothing if
+    the editor was not launched by this server session (reported as an issue).
+
+    Deterministic verification: after killing the process tree, re-checks that
+    the editor is no longer reachable; status is "ok" only when it has gone down.
     """
     client = _client()
     result = _safe(client.stop)
-    return json.dumps(result, indent=2, default=str)
+    if not isinstance(result, dict):
+        return _result("error", [str(result)])
+    issues: list[str] = []
+    stopped = bool(result.get("stopped"))
+    if not stopped:
+        issues.append(str(result.get("detail") or "Editor was not launched by this MCP session; stop is a no-op."))
+    else:
+        try:
+            if client.is_running():
+                issues.append("Editor still reports as reachable after stop (port may take a moment to release).")
+        except DefoldError:
+            pass  # unreachable => stopped, verification passed
+    return _result("ok" if stopped and not issues else "error", issues)
 
 
 # ------------------------------------------------------------------ #
@@ -482,11 +551,22 @@ def defold_stop() -> str:
 def defold_clean_build() -> str:
     """Clean build: delete build artifacts and recompile the project.
 
-    Returns ``success`` and any ``issues`` (errors/warnings).
+    Returns structured JSON ``{status, issues[], artifacts{}}`` where issues
+    carry the editor's compile errors/warnings (file/line detail) verbatim.
+
+    Deterministic verification: status is "ok" only when the editor answers
+    HTTP 200 with ``success: true`` and no issues; a non-empty issue list
+    downgrades the status to "error".
     """
     client = _client()
     result = _safe(client.clean_build)
-    return json.dumps(result, indent=2, default=str)
+    if not isinstance(result, dict):
+        return _result("error", [str(result)])
+    issues: list[str] = list(result.get("issues") or [])
+    ok = bool(result.get("success")) and result.get("_http_status") == 200
+    if not ok:
+        issues.append(f"clean build reported success={result.get('success')} http={result.get('_http_status')}")
+    return _result("ok" if ok and not issues else "error", issues)
 
 
 @tool("modify")

@@ -227,6 +227,11 @@ Set the env var **`DEFOLD_MCP_READONLY=1`** on the server to gate every
 `defold_status` reports the active mode (`mcp_mode`) and each tool's level
 (`tool_levels`).
 
+Mutative operations (`defold_run`, `defold_open_project`, `defold_stop`,
+`defold_clean_build`) return uniformly parseable JSON `{status, issues[], artifacts{}}`. Each runs a deterministic verification (documented in its docstring) before
+reporting `status: "ok"`. Artifacts (screenshots, diffs, logs) are written under
+`ai_work/artifacts/<run-id>/`.
+
 
 ## Typical usage (by an agent)
 
