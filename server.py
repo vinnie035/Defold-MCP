@@ -21,8 +21,11 @@ from __future__ import annotations
 
 import base64
 import functools
+import platform
 import re
+import shutil
 import urllib.request
+import zipfile
 import json
 import os
 import subprocess
@@ -544,6 +547,278 @@ def defold_docs(query: str, fetch: bool = True, max_chars: int = 20000) -> str:
     matches the exact build of the running editor.
     """
     return _docs_search_and_fetch(query, fetch=fetch, max_chars=max_chars)
+
+
+# ------------------------------------------------------------------ #
+# Headless Bob builds (no editor required)
+# ------------------------------------------------------------------ #
+_BOB_CACHE_DIR = Path(__file__).resolve().parent / ".cache" / "bob"
+_JAVA_CACHE_DIR = Path(__file__).resolve().parent / ".cache" / "java"
+_BOB_FALLBACK_URL = "https://github.com/defold/defold/releases/latest/download/bob.jar"
+_BOB_MIN_JAVA = 25
+
+
+def _artifact_dir(run_id: str) -> Path:
+    """``ai_work/artifacts/<run-id>/`` (created)."""
+    d = Path(__file__).resolve().parent / "ai_work" / "artifacts" / run_id
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _java_major(java_exe: str) -> Optional[int]:
+    try:
+        p = subprocess.run([java_exe, "-version"], capture_output=True, text=True, timeout=30)
+        out = ((p.stderr or "") + (p.stdout or ""))
+        m = re.search(r'version "(\d+)(?:\.([0-9]+))?', out)
+        if not m:
+            return None
+        major = int(m.group(1))
+        if major == 1 and m.group(2):
+            return int(m.group(2))
+        return major
+    except Exception:
+        return None
+
+
+def _resolve_java(min_major: int = _BOB_MIN_JAVA, download: bool = True) -> tuple:
+    """Find a java executable with major >= ``min_major``.
+
+    Order: ``DEFOLD_MCP_JAVA`` env var, PATH ``java``, cached JRE dirs in
+    ``.cache/java/`` (auto-downloaded from Temurin when nothing works).
+    Returns ``(path, major)``; raises DefoldError when resolution fails.
+    """
+    cands: list = []
+    env = os.environ.get("DEFOLD_MCP_JAVA", "").strip()
+    if env and Path(env).exists():
+        cands.append(env)
+    which_java = shutil.which("java")
+    if which_java:
+        cands.append(which_java)
+    exe_name = "java.exe" if os.name == "nt" else "java"
+    for d in sorted(_JAVA_CACHE_DIR.glob("jdk-*"), reverse=True):
+        exe = d / "bin" / exe_name
+        if exe.exists():
+            cands.append(str(exe))
+    for c in cands:
+        mj = _java_major(c)
+        if mj is not None and mj >= min_major:
+            return c, mj
+
+    if not download:
+        raise DefoldError(f"no java >= {min_major} found locally (set DEFOLD_MCP_JAVA)")
+    # Nothing suitable locally: download Temurin JRE into .cache/java/
+    arch = "aarch64" if platform.machine().lower() in ("arm64", "aarch64") else "x64"
+    osname = {"nt": "windows", "darwin": "mac"}.get(os.name, "linux")
+    api = "https://api.github.com/repos/adoptium/temurin25-binaries/releases/latest"
+    req = urllib.request.Request(api, headers={"User-Agent": "defold-mcp/1.0"})
+    rel = json.load(urllib.request.urlopen(req, timeout=60))
+    pat = re.compile(r"^OpenJDK25U-jre_%s_%s_hotspot_.*\.zip$" % (arch, osname))
+    asset = next((a for a in rel.get("assets", []) if pat.match(a["name"])), None)
+    if asset is None:
+        raise DefoldError(f"No Temurin 25 JRE {arch}/{osname} asset found")
+    _JAVA_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    z = _JAVA_CACHE_DIR / "jre25.zip"
+    dl = urllib.request.Request(asset["browser_download_url"], headers={"User-Agent": "defold-mcp/1.0"})
+    with urllib.request.urlopen(dl, timeout=900) as r:
+        with open(z, "wb") as f:
+            shutil.copyfileobj(r, f)
+    with zipfile.ZipFile(z) as zf:
+        zf.extractall(_JAVA_CACHE_DIR)
+    z.unlink(missing_ok=True)
+    for d in sorted(_JAVA_CACHE_DIR.glob("jdk-*"), reverse=True):
+        exe = d / "bin" / exe_name
+        if exe.exists():
+            return str(exe), 25
+    raise DefoldError("Downloaded JRE extracted but no java executable found")
+
+
+def _resolve_bob(download: bool = True) -> Path:
+    """Locate bob.jar.
+
+    Order: ``DEFOLD_MCP_BOB`` env var, a Defold install
+    (``<install>/bob/jar/bob.jar``), else ``.cache/bob/bob.jar`` auto-downloaded
+    from the latest defold/defold release (~219 MiB, one-time).
+    """
+    env = os.environ.get("DEFOLD_MCP_BOB", "").strip()
+    if env:
+        p = Path(env)
+        if not p.exists():
+            raise DefoldError(f"DEFOLD_MCP_BOB does not exist: {env}")
+        return p
+    for base in (Path(os.environ.get("PROGRAMFILES", "C:/Program Files")) / "Defold", Path("C:/Defold")):
+        p = base / "bob" / "jar" / "bob.jar"
+        if p.exists():
+            return p
+    cached = _BOB_CACHE_DIR / "bob.jar"
+    if not cached.exists() and not download:
+        raise DefoldError("bob.jar not found locally (set DEFOLD_MCP_BOB)")
+    if not cached.exists():
+        _BOB_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = cached.with_suffix(".part")
+        req = urllib.request.Request(_BOB_FALLBACK_URL, headers={"User-Agent": "defold-mcp/1.0"})
+        with urllib.request.urlopen(req, timeout=1800) as r:
+            with open(tmp, "wb") as f:
+                shutil.copyfileobj(r, f)
+        tmp.replace(cached)
+    return cached
+
+
+def _run_bob(java_exe: str, bob_jar: Path, project: Path, options: list, commands: list) -> tuple:
+    """Run ``java -jar bob.jar <options> <commands>``; returns (rc, stdout+stderr)."""
+    cmd = [java_exe, "-jar", str(bob_jar), "--root", str(project)] + options + commands
+    p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=1800)
+    return p.returncode, (p.stdout or "") + (p.stderr or "")
+
+
+def _parse_build_report(path: Path) -> Optional[dict]:
+    """Parse the official bob --build-report-json file; None when absent/invalid."""
+    if not path.exists():
+        return None
+    try:
+        d = json.loads(path.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else None
+    except Exception:
+        return None
+
+
+@tool("modify")
+def defold_bob_build(settings_name: str = "", settings_file: str = "", target_platform: str = "") -> str:
+    """Headless bob ``resolve build`` without the Defold editor.
+
+    Runs ``java -jar bob.jar --root <project> [--settings NAME FILE]
+    [--platform X] --build-report-json <artifact> resolve build`` and parses
+    the official JSON build report (not just the exit status). Bob resolves
+    from ``DEFOLD_MCP_BOB``, a Defold install, or ``.cache/bob/``; java >= 25
+    from PATH or ``.cache/java/`` (auto-downloaded).
+
+    Verification before reporting ok: process exit code 0 AND a parseable
+    report with non-empty ``resources[]``. Artifacts under
+    ``ai_work/artifacts/<run-id>/``: ``bob-build-report.json``, ``bob-stdout.log``.
+    """
+    run_id = _new_run_id("bob-build")
+    outdir = _artifact_dir(run_id)
+    report_path = outdir / "bob-build-report.json"
+    issues: list = []
+    artifacts = {"build_report": str(report_path)}
+    try:
+        java_exe, java_mj = _resolve_java()
+        bob_jar = _resolve_bob()
+        project = Path(_default_project())
+        options = ["--build-report-json", str(report_path)]
+        if settings_name and settings_file:
+            options += ["--settings", settings_name, settings_file]
+        elif bool(settings_name) != bool(settings_file):
+            issues.append("Provide both settings_name and settings_file (or neither).")
+            return _result("error", issues, artifacts)
+        if target_platform:
+            options += ["--platform", target_platform]
+        rc, log = _run_bob(java_exe, bob_jar, project, options, ["resolve", "build"])
+    except DefoldError as e:
+        return _result("error", [str(e)], artifacts)
+    (outdir / "bob-stdout.log").write_text(log, encoding="utf-8")
+    artifacts["log"] = str(outdir / "bob-stdout.log")
+    if rc != 0:
+        issues.append(f"bob exited with code {rc}: " + log.strip().splitlines()[-1] if log.strip() else f"bob exited with code {rc}")
+    report = _parse_build_report(report_path)
+    if report is None:
+        issues.append("Build report JSON missing or unparseable.")
+    summary = {}
+    if report:
+        res = report.get("resources", [])
+        summary = {
+            "project_name": report.get("project_name"),
+            "report_version": report.get("report_version"),
+            "resources": len(res),
+            "total_bytes": sum(r.get("size", 0) for r in res if isinstance(r, dict)),
+        }
+        if not res:
+            issues.append("Build report contains no resources.")
+    status = "ok" if (rc == 0 and report is not None and summary.get("resources")) else "error"
+    out = json.loads(_result(status, issues, artifacts))
+    out["report"] = summary
+    return json.dumps(out, indent=2)
+
+
+@tool("modify")
+def defold_bob_bundle(target_platform: str, settings_name: str = "", settings_file: str = "", variant: str = "headless", archive: bool = True) -> str:
+    """Headless bob ``resolve build bundle`` for one platform (no editor).
+
+    Reference shape from the Defold manual::
+
+      java -jar bob.jar --root . --settings test /test.settings \
+        --platform x86_64-linux --variant headless --archive \
+        --bundle-output <dir> resolve build bundle
+
+    ``settings_name``/``settings_file`` pass a custom settings file (e.g. the
+    CI-only ``/test.settings``). Output goes to ``ai_work/artifacts/<run-id>/bundle``
+    by default; the JSON build report is also captured and parsed.
+
+    Verification before reporting ok: exit code 0, parseable report, and at
+    least one file in the bundle output directory.
+    """
+    run_id = _new_run_id("bob-bundle")
+    outdir = _artifact_dir(run_id)
+    bundle_out = outdir / "bundle"
+    bundle_out.mkdir(parents=True, exist_ok=True)
+    report_path = outdir / "bob-build-report.json"
+    issues: list = []
+    artifacts = {"build_report": str(report_path), "bundle_output": str(bundle_out)}
+    try:
+        java_exe, _ = _resolve_java()
+        bob_jar = _resolve_bob()
+        project = Path(_default_project())
+        options = ["--platform", target_platform, "--variant", variant,
+                   "--build-report-json", str(report_path),
+                   "--bundle-output", str(bundle_out)]
+        if archive:
+            options.append("--archive")
+        if settings_name and settings_file:
+            options += ["--settings", settings_name, settings_file]
+        elif bool(settings_name) != bool(settings_file):
+            issues.append("Provide both settings_name and settings_file (or neither).")
+            return _result("error", issues, artifacts)
+        rc, log = _run_bob(java_exe, bob_jar, project, options, ["resolve", "build", "bundle"])
+    except DefoldError as e:
+        return _result("error", [str(e)], artifacts)
+    (outdir / "bob-stdout.log").write_text(log, encoding="utf-8")
+    artifacts["log"] = str(outdir / "bob-stdout.log")
+    if rc != 0:
+        tail = log.strip().splitlines()[-1] if log.strip() else ""
+        issues.append(f"bob exited with code {rc}: {tail}")
+    report = _parse_build_report(report_path)
+    if report is None:
+        issues.append("Build report JSON missing or unparseable.")
+    bundled = [str(p.relative_to(outdir)) for p in bundle_out.rglob("*") if p.is_file()]
+    status = "ok" if (rc == 0 and report is not None and bundled) else "error"
+    out = json.loads(_result(status, issues, artifacts))
+    out["bundle_files"] = bundled[:50]
+    return json.dumps(out, indent=2)
+
+
+@tool("read")
+def defold_bob_doctor() -> str:
+    """Check headless build prerequisites: java version, bob.jar location, extender env.
+
+    Read-only; downloads nothing. Reports what ``defold_bob_build`` would use.
+    """
+    info: dict = {"ok": True, "issues": []}
+    try:
+        java_exe, mj = _resolve_java(download=False)
+        info["java"] = {"path": java_exe, "major": mj}
+    except Exception as e:
+        info["java"] = None
+        info["issues"].append(f"java >= {_BOB_MIN_JAVA} not resolvable locally: {e}")
+        info["ok"] = False
+    try:
+        bob_jar = _resolve_bob(download=False)
+        info["bob_jar"] = {"path": str(bob_jar), "bytes": bob_jar.stat().st_size}
+    except Exception as e:
+        info["bob_jar"] = None
+        info["issues"].append(f"bob.jar not resolvable: {e}")
+        info["ok"] = False
+    ext = os.environ.get("DEFOLD_EXTENDER", "").strip()
+    info["extender_env"] = ext or None
+    return json.dumps(info, indent=2)
 
 
 @tool("read")
