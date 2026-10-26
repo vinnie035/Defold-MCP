@@ -155,7 +155,7 @@ capture offset is applied internally by the tools.
 | Component | Needed for | Notes |
 |---|---|---|
 | **Python 3** (e.g. 3.12+) | server venv + GUI helper | Two interpreters are involved: the venv running `server.py`, and an external Python running `tools/editor_gui.py` (`editor_*` tools) |
-| **`mcp>=1.2.0`** | all tools | installed in the server venv via `requirements.txt` |
+| **`mcp>=2.3.0`** | all tools | installed in the server venv via `requirements.txt` |
 | **Defold editor** | all `defold_*` tools | discovered via `%LOCALAPPDATA%\Defold\installations.json`, then common locations, then `PATH` |
 | **Automation Bridge v2** extension | `defold_bridge_*`, `defold_screenshot`, `defold_inject_input` | installed *in the project* (step 4); everything else works without it |
 | **`mss`, `pyautogui`, `Pillow`, `pywinauto`** | all 5 `editor_*` tools | in an external Python interpreter (auto-detected; override with `DEFOLD_EDITOR_PYTHON`) - *not* the server venv |
@@ -209,6 +209,24 @@ A ready-to-use MCP client config template is provided in
 Python interpreter and `server.py`, needs no env vars, and sets a **120 s**
 request timeout (`timeoutMs: 120000`). Import it into your MCP client and
 adjust the paths to your install location.
+
+## Privilege levels & read-only mode
+
+Every tool is registered with a privilege level (`ToolAnnotations`):
+
+| Level | Meaning | Tools |
+|---|---|---|
+| **read** | no side effects (`readOnlyHint=true`) | `defold_status`, `console`, `ref`, `engine_info`, `preview`, `screenshot`, all read-only `bridge_*` queries, `editor_screenshot`, `editor_find` |
+| **verify** | runs a build/run to check state (idempotent) | `compile`, `clean_build`, `run` |
+| **modify** | changes editor/game state | `open_project`, `stop`, `hot_reload`, `inject_input`, bridge input/pointer/recording/marker/metal ops, `editor_click` / `editor_type` / `editor_key` |
+| **privileged** | arbitrary app-command dispatch (potentially destructive) | `bridge_command`, `bridge_command_cancel` |
+
+Set the env var **`DEFOLD_MCP_READONLY=1`** on the server to gate every
+`modify` and `privileged` tool: they return a structured
+`{"success": false, "error": "blocked: read-only"}` with no side effect.
+`defold_status` reports the active mode (`mcp_mode`) and each tool's level
+(`tool_levels`).
+
 
 ## Typical usage (by an agent)
 

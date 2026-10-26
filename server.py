@@ -20,6 +20,7 @@ containing a ``game.project`` file.
 from __future__ import annotations
 
 import base64
+import functools
 import json
 import os
 import subprocess
@@ -31,7 +32,11 @@ try:  # mcp v1
     from mcp.server.fastmcp import FastMCP as _Server
 except ModuleNotFoundError:  # mcp v2 (FastMCP -> MCPServer)
     from mcp.server.mcpserver import MCPServer as _Server
-from mcp.types import ImageContent, TextContent
+from mcp.types import (
+    ImageContent,
+    TextContent,
+    ToolAnnotations as _ToolAnnotations,
+)
 
 from defold_client import DefoldClient, DefoldError
 
@@ -183,6 +188,56 @@ def _default_project() -> str:
 
 
 mcp = _Server("defold")
+# ---------------------------------------------------------------------------
+# Privilege levels + read-only mode (Phase 1)
+# Levels: read < verify < modify < privileged. When DEFOLD_MCP_READONLY=1,
+# modify/privileged tools are gated and return a structured error JSON.
+# ---------------------------------------------------------------------------
+READONLY = os.environ.get("DEFOLD_MCP_READONLY", "").strip().lower() in (
+    "1", "true", "yes"
+)
+
+_TOOL_ANNOTATIONS: dict[str, "_ToolAnnotations"] = {
+    "read": _ToolAnnotations(
+        read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
+    ),
+    "verify": _ToolAnnotations(
+        read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=True
+    ),
+    "modify": _ToolAnnotations(
+        read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=True
+    ),
+    "privileged": _ToolAnnotations(
+        read_only_hint=False, destructive_hint=True, idempotent_hint=False, open_world_hint=True
+    ),
+}
+
+_TOOL_LEVELS: dict[str, str] = {}  # tool name -> level (populated by @tool)
+
+
+def tool(level):
+    """Register a tool with privilege-level annotations and an optional read-only gate."""
+    assert level in _TOOL_ANNOTATIONS, f"unknown tool level {level!r}"
+
+    def decorator(fn):
+        if level in ("modify", "privileged"):
+
+            @functools.wraps(fn)
+            def gated(*args, **kwargs):
+                if READONLY:
+                    return json.dumps(
+                        {"success": False, "error": "blocked: read-only"}, indent=2
+                    )
+                return fn(*args, **kwargs)
+
+            target = gated
+        else:
+            target = fn
+        _TOOL_LEVELS[target.__name__] = level
+        mcp.tool(annotations=_TOOL_ANNOTATIONS[level])(target)
+        return target
+
+    return decorator
 
 # A single client instance so that a process launched by defold_open_project
 # stays tracked across tool calls within this server's lifetime.
@@ -233,7 +288,7 @@ def _safe(fn, *args, **kwargs):
         return {"success": False, "error": str(e)}
 
 
-@mcp.tool()
+@tool("read")
 def defold_status() -> str:
     """Check whether the Defold editor is installed and whether a project is open/running.
 
@@ -259,10 +314,12 @@ def defold_status() -> str:
             )
         except DefoldError:
             pass
+    info["mcp_mode"] = "read-only" if READONLY else "standard"
+    info["tool_levels"] = dict(_TOOL_LEVELS)
     return json.dumps(info, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("modify")
 def defold_open_project(launch: bool = True, port: Optional[int] = None) -> str:
     """Connect to the Defold editor for this project.
 
@@ -282,7 +339,7 @@ def defold_open_project(launch: bool = True, port: Optional[int] = None) -> str:
         return json.dumps({"connected": False, "error": str(e)})
 
 
-@mcp.tool()
+@tool("verify")
 def defold_compile() -> str:
     """Compile the project without running it.
 
@@ -294,7 +351,7 @@ def defold_compile() -> str:
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("verify")
 def defold_run() -> str:
     """Compile and run the project in the editor (debug build).
 
@@ -306,7 +363,7 @@ def defold_run() -> str:
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("read")
 def defold_console(tail: int = 200) -> str:
     """Read the editor console (game + build output).
 
@@ -324,7 +381,7 @@ def defold_console(tail: int = 200) -> str:
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("read")
 def defold_preview(path: str, width: int = 1280, height: int = 720) -> list:
     """Render a scene resource to a PNG using the editor's scene view.
 
@@ -340,7 +397,7 @@ def defold_preview(path: str, width: int = 1280, height: int = 720) -> list:
         return _text({"error": str(e)})
 
 
-@mcp.tool()
+@tool("read")
 def defold_ref(query: str, environment: str = "runtime", language: str = "Lua") -> str:
     """Search the Defold API documentation bundled with the running editor.
 
@@ -352,7 +409,7 @@ def defold_ref(query: str, environment: str = "runtime", language: str = "Lua") 
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("read")
 def defold_engine_info() -> str:
     """Query the running game's engine service: /ping, /info, /state.
 
@@ -375,7 +432,7 @@ def defold_engine_info() -> str:
         return json.dumps({"error": str(e)})
 
 
-@mcp.tool()
+@tool("read")
 def defold_screenshot(after_frames: int = 0) -> list:
     """Capture a runtime screenshot of the running game.
 
@@ -393,7 +450,7 @@ def defold_screenshot(after_frames: int = 0) -> list:
         return _text({"error": str(e)})
 
 
-@mcp.tool()
+@tool("modify")
 def defold_inject_input(x: int, y: int, button: str = "left") -> str:
     """Inject a mouse click into the running game.
 
@@ -405,7 +462,7 @@ def defold_inject_input(x: int, y: int, button: str = "left") -> str:
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("modify")
 def defold_stop() -> str:
     """Best-effort stop: terminates the editor process that this MCP server
     launched (and thus the running game). Does nothing if the editor was not
@@ -421,7 +478,7 @@ def defold_stop() -> str:
 # ------------------------------------------------------------------ #
 
 
-@mcp.tool()
+@tool("verify")
 def defold_clean_build() -> str:
     """Clean build: delete build artifacts and recompile the project.
 
@@ -432,7 +489,7 @@ def defold_clean_build() -> str:
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("modify")
 def defold_hot_reload() -> str:
     """Hot-reload all modified files into the running project.
 
@@ -450,7 +507,7 @@ def defold_hot_reload() -> str:
 # ------------------------------------------------------------------ #
 
 
-@mcp.tool()
+@tool("read")
 def defold_bridge_health() -> str:
     """Query the Automation Bridge v2 health endpoint.
 
@@ -463,7 +520,7 @@ def defold_bridge_health() -> str:
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("read")
 def defold_bridge_lifecycle() -> str:
     """Get the ordered runtime lifecycle stages of the running game."""
     client = _client()
@@ -471,7 +528,7 @@ def defold_bridge_lifecycle() -> str:
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("read")
 def defold_bridge_screen() -> str:
     """Get the game's screen layout: named rectangles, display scale, and the
     coordinate convention used by the bridge.
@@ -481,7 +538,7 @@ def defold_bridge_screen() -> str:
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("modify")
 def defold_bridge_resize_screen(width: int, height: int) -> str:
     """Resize the game's native window to ``width`` x ``height``."""
     client = _client()
@@ -489,7 +546,7 @@ def defold_bridge_resize_screen(width: int, height: int) -> str:
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("read")
 def defold_bridge_convert_coordinates(x: float, y: float, from_space: str, to_space: str) -> str:
     """Convert a point between coordinate spaces.
 
@@ -501,7 +558,7 @@ def defold_bridge_convert_coordinates(x: float, y: float, from_space: str, to_sp
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("read")
 def defold_bridge_frame() -> str:
     """Get the current engine frame number and scene sequence."""
     client = _client()
@@ -514,7 +571,7 @@ def defold_bridge_frame() -> str:
 # ------------------------------------------------------------------ #
 
 
-@mcp.tool()
+@tool("read")
 def defold_bridge_scene(visible: Optional[bool] = None, include: Optional[str] = None) -> str:
     """Inspect the full runtime scene tree of the running game.
 
@@ -526,7 +583,7 @@ def defold_bridge_scene(visible: Optional[bool] = None, include: Optional[str] =
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("read")
 def defold_bridge_elements(
     type: Optional[str] = None,
     name: Optional[str] = None,
@@ -566,7 +623,7 @@ def defold_bridge_elements(
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("read")
 def defold_bridge_element(element_id: str, include: Optional[str] = None) -> str:
     """Get one runtime element in detail (bounds + properties by default)."""
     client = _client()
@@ -579,7 +636,7 @@ def defold_bridge_element(element_id: str, include: Optional[str] = None) -> str
 # ------------------------------------------------------------------ #
 
 
-@mcp.tool()
+@tool("modify")
 def defold_bridge_click(
     x: Optional[float] = None,
     y: Optional[float] = None,
@@ -607,7 +664,7 @@ def defold_bridge_click(
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("modify")
 def defold_bridge_drag(
     x1: Optional[float] = None,
     y1: Optional[float] = None,
@@ -636,7 +693,7 @@ def defold_bridge_drag(
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("modify")
 def defold_bridge_drag_path(
     points: str,
     durations: Optional[str] = None,
@@ -662,7 +719,7 @@ def defold_bridge_drag_path(
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("modify")
 def defold_bridge_key(
     text: Optional[str] = None,
     keys: Optional[str] = None,
@@ -682,7 +739,7 @@ def defold_bridge_key(
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("modify")
 def defold_bridge_wheel(
     steps: int,
     x: Optional[float] = None,
@@ -700,7 +757,7 @@ def defold_bridge_wheel(
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("read")
 def defold_bridge_input_status(input_id: int) -> str:
     """Get the current (or bounded-history) status of one injected input."""
     client = _client()
@@ -708,7 +765,7 @@ def defold_bridge_input_status(input_id: int) -> str:
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("read")
 def defold_bridge_input_pending() -> str:
     """List the FIFO queue of pending injected inputs."""
     client = _client()
@@ -716,7 +773,7 @@ def defold_bridge_input_pending() -> str:
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("modify")
 def defold_bridge_input_cancel(input_id: int, release: Optional[bool] = None) -> str:
     """Cancel one queued/active injected input by id."""
     client = _client()
@@ -724,7 +781,7 @@ def defold_bridge_input_cancel(input_id: int, release: Optional[bool] = None) ->
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("modify")
 def defold_bridge_input_flush(release: Optional[bool] = None) -> str:
     """Cancel the session's active and later queued inputs."""
     client = _client()
@@ -732,7 +789,7 @@ def defold_bridge_input_flush(release: Optional[bool] = None) -> str:
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("modify")
 def defold_bridge_input_configure(
     client_id: str,
     session_id: str,
@@ -752,7 +809,7 @@ def defold_bridge_input_configure(
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("modify")
 def defold_bridge_pointer_open(
     x: float,
     y: float,
@@ -771,7 +828,7 @@ def defold_bridge_pointer_open(
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("modify")
 def defold_bridge_pointer_move(
     input_id: int,
     x: float,
@@ -789,7 +846,7 @@ def defold_bridge_pointer_move(
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("modify")
 def defold_bridge_pointer_hold(input_id: int, duration: float, pointer_lease: float = 2.0) -> str:
     """Hold an open pointer for ``duration`` seconds."""
     client = _client()
@@ -797,7 +854,7 @@ def defold_bridge_pointer_hold(input_id: int, duration: float, pointer_lease: fl
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("modify")
 def defold_bridge_pointer_up(input_id: int, pointer_lease: float = 2.0) -> str:
     """Release an open pointer."""
     client = _client()
@@ -810,7 +867,7 @@ def defold_bridge_pointer_up(input_id: int, pointer_lease: float = 2.0) -> str:
 # ------------------------------------------------------------------ #
 
 
-@mcp.tool()
+@tool("read")
 def defold_bridge_recording_capabilities() -> str:
     """Check native video recording availability on this platform."""
     client = _client()
@@ -818,7 +875,7 @@ def defold_bridge_recording_capabilities() -> str:
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("read")
 def defold_bridge_recording_status() -> str:
     """Get the active or most recently finalized recording."""
     client = _client()
@@ -826,7 +883,7 @@ def defold_bridge_recording_status() -> str:
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("modify")
 def defold_bridge_recording_start(
     path: str,
     width: Optional[int] = None,
@@ -847,7 +904,7 @@ def defold_bridge_recording_start(
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("modify")
 def defold_bridge_recording_stop() -> str:
     """Stop the active recording and finalize the MP4 file."""
     client = _client()
@@ -860,7 +917,7 @@ def defold_bridge_recording_stop() -> str:
 # ------------------------------------------------------------------ #
 
 
-@mcp.tool()
+@tool("read")
 def defold_bridge_events_cursor() -> str:
     """Get the next and oldest retained event cursors."""
     client = _client()
@@ -868,7 +925,7 @@ def defold_bridge_events_cursor() -> str:
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("read")
 def defold_bridge_events(
     cursor: Optional[int] = None,
     timeout_ms: Optional[int] = None,
@@ -883,7 +940,7 @@ def defold_bridge_events(
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("read")
 def defold_bridge_state(name: Optional[str] = None) -> str:
     """Get all published game states, or one by exact ``name``."""
     client = _client()
@@ -891,7 +948,7 @@ def defold_bridge_state(name: Optional[str] = None) -> str:
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("read")
 def defold_bridge_state_wait(after_revision: int, timeout_ms: int = 10000) -> str:
     """Long-poll until a newer state revision appears (or the timeout elapses)."""
     client = _client()
@@ -899,7 +956,7 @@ def defold_bridge_state_wait(after_revision: int, timeout_ms: int = 10000) -> st
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("read")
 def defold_bridge_application_catalog(
     kind: Optional[str] = None,
     name: Optional[str] = None,
@@ -919,7 +976,7 @@ def defold_bridge_application_catalog(
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("privileged")
 def defold_bridge_command(name: str, data: Optional[Any] = None, timeout_ms: Optional[int] = None) -> str:
     """Submit a named command to the running game.
 
@@ -931,7 +988,7 @@ def defold_bridge_command(name: str, data: Optional[Any] = None, timeout_ms: Opt
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("read")
 def defold_bridge_command_status(command_id: int) -> str:
     """Poll a submitted command by id."""
     client = _client()
@@ -939,7 +996,7 @@ def defold_bridge_command_status(command_id: int) -> str:
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("privileged")
 def defold_bridge_command_cancel(command_id: int) -> str:
     """Cancel a pending command by id."""
     client = _client()
@@ -947,7 +1004,7 @@ def defold_bridge_command_cancel(command_id: int) -> str:
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("modify")
 def defold_bridge_marker(
     name: str,
     data: Optional[Any] = None,
@@ -970,7 +1027,7 @@ def defold_bridge_marker(
 # ------------------------------------------------------------------ #
 
 
-@mcp.tool()
+@tool("modify")
 def defold_bridge_metal(path: str, frames: Optional[int] = None) -> str:
     """Schedule a Metal GPU trace capture to ``path`` (macOS only).
 
@@ -981,7 +1038,7 @@ def defold_bridge_metal(path: str, frames: Optional[int] = None) -> str:
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("read")
 def defold_bridge_metal_status() -> str:
     """Poll a Metal GPU trace capture's status (macOS only)."""
     client = _client()
@@ -989,7 +1046,7 @@ def defold_bridge_metal_status() -> str:
     return json.dumps(result, indent=2, default=str)
 
 
-@mcp.tool()
+@tool("modify")
 def defold_bridge_metal_stop() -> str:
     """Request an early stop of a Metal GPU trace capture (macOS only)."""
     client = _client()
@@ -1058,7 +1115,7 @@ def _run_editor_gui(args: list) -> dict:
         raise DefoldError(f"editor_gui {' '.join(args)} returned invalid JSON: {stdout[:300]}") from e
 
 
-@mcp.tool()
+@tool("read")
 def editor_screenshot(save_path: str = "") -> list:
     """Capture a screenshot of the Defold editor window (OS level).
 
@@ -1102,7 +1159,7 @@ def editor_screenshot(save_path: str = "") -> list:
     return blocks
 
 
-@mcp.tool()
+@tool("read")
 def editor_find(grep: Optional[str] = None, max_words: int = 50) -> str:
     """OCR the Defold editor window and locate UI text (OS level).
 
@@ -1124,7 +1181,7 @@ def editor_find(grep: Optional[str] = None, max_words: int = 50) -> str:
     return json.dumps(result, indent=2, default=str, ensure_ascii=True)
 
 
-@mcp.tool()
+@tool("modify")
 def editor_click(x: int, y: int, button: str = "left", double: bool = False) -> str:
     """Click at a window-relative pixel coordinate in the Defold editor (OS level).
 
@@ -1142,7 +1199,7 @@ def editor_click(x: int, y: int, button: str = "left", double: bool = False) -> 
     return json.dumps(result, indent=2, default=str, ensure_ascii=True)
 
 
-@mcp.tool()
+@tool("modify")
 def editor_type(text: str) -> str:
     """Type text into the focused Defold editor control (OS level).
 
@@ -1157,7 +1214,7 @@ def editor_type(text: str) -> str:
     return json.dumps(result, indent=2, default=str, ensure_ascii=True)
 
 
-@mcp.tool()
+@tool("modify")
 def editor_key(combo: str) -> str:
     """Press a key or chord in the Defold editor (OS level).
 
