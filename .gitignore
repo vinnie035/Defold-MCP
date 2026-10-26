@@ -32,3 +32,4 @@ ai_work/
 
 # Local doc cache (llms.txt indexes)
 .cache/
+.baselines/

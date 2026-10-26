@@ -941,6 +941,116 @@ def defold_screenshot(after_frames: int = 0) -> list:
         return _text({"error": str(e)})
 
 
+@tool("read")
+def defold_screenshot_diff(scene: str, baseline_path: str = "", save_baseline: bool = False, tolerance: int = 0) -> str:
+    """Visually compare a runtime screenshot against a stored baseline (Pillow).
+
+    Captures the running game via Automation Bridge v2 and compares it pixel by
+    pixel with ``baseline_path`` (default: <project>/.baselines/<scene>.png).
+
+    - No baseline + ``save_baseline=True`` -> stores the capture as the new baseline.
+    - No baseline otherwise                -> status "error" with an actionable issue.
+    - Size mismatch                        -> current capture resized to baseline size (issue).
+
+    Deterministic verification: a pixel is changed when any RGB channel differs by
+    more than ``tolerance``. Reports changed-pixel count, percentage and bounding
+    boxes of connected change regions (top 10 by area) under "comparison".
+
+    Artifacts under ai_work/artifacts/<run-id>/: shot.png (current capture),
+    diff.png (channel difference + red outlines around reported regions).
+    """
+    from PIL import Image, ImageChops, ImageDraw
+
+    client = _client()
+    png = _safe(client.screenshot)
+    if not isinstance(png, (bytes, bytearray)) or not png:
+        return _result("error", [f"Screenshot failed: {png!r}"])
+    run_id = _new_run_id("shot-diff")
+    outdir = _artifact_dir(run_id)
+    outdir.mkdir(parents=True, exist_ok=True)
+    shot_path = outdir / "shot.png"
+    shot_path.write_bytes(bytes(png))
+
+    if baseline_path:
+        base = Path(baseline_path).expanduser()
+    else:
+        try:
+            base = Path(_default_project()) / ".baselines" / f"{scene}.png"
+        except DefoldError as e:
+            return _result("error", [f"No project resolved for default baseline: {e}"])
+    issues: list[str] = []
+
+    if not base.exists():
+        if save_baseline:
+            base.parent.mkdir(parents=True, exist_ok=True)
+            base.write_bytes(bytes(png))
+            return _result("ok", [f"No baseline; created {base}"], {"shot": str(shot_path), "baseline": str(base)})
+        return _result("error", [f"No baseline at {base}. Re-run with save_baseline=True to create it."], {"shot": str(shot_path)})
+
+    cur = Image.open(str(shot_path)).convert("RGB")
+    ref = Image.open(str(base)).convert("RGB")
+    if cur.size != ref.size:
+        issues.append(f"Size mismatch {cur.size} vs baseline {ref.size}; resized current.")
+        cur = cur.resize(ref.size)
+
+    diff = ImageChops.difference(cur, ref)
+    masks = [ch.point(lambda v: 255 if v > tolerance else 0) for ch in diff.split()]
+    mask = ImageChops.lighter(ImageChops.lighter(masks[0], masks[1]), masks[2])
+
+    width, height = cur.size
+    data = bytearray(mask.tobytes())
+    total = width * height
+    changed = sum(1 for v in data if v)
+
+    visited = bytearray(total)
+    regions: list[tuple[int, int, int, int, int]] = []
+    for start in range(total):
+        if not data[start] or visited[start]:
+            continue
+        sx, sy = start % width, start // width
+        x0 = x1 = sx
+        y0 = y1 = sy
+        count = 0
+        stack = [start]
+        visited[start] = 1
+        while stack:
+            i = stack.pop()
+            x, y = i % width, i // width
+            count += 1
+            if x < x0: x0 = x
+            if x > x1: x1 = x
+            if y < y0: y0 = y
+            if y > y1: y1 = y
+            for j in (i - 1 if x > 0 else -1, i + 1 if x < width - 1 else -1,
+                      i - width if y > 0 else -1, i + width if y < height - 1 else -1):
+                if j >= 0 and data[j] and not visited[j]:
+                    visited[j] = 1
+                    stack.append(j)
+        regions.append((x0, y0, x1, y1, count))
+
+    diff_path = outdir / "diff.png"
+    top = sorted(regions, key=lambda r: r[4], reverse=True)[:10]
+    draw = ImageDraw.Draw(diff)
+    for (rx0, ry0, rx1, ry1, _n) in top:
+        draw.rectangle([rx0, ry0, rx1, ry1], outline=(255, 0, 0), width=2)
+    diff.save(str(diff_path))
+
+    bboxes = [{"x": r[0], "y": r[1], "w": r[2] - r[0] + 1, "h": r[3] - r[1] + 1} for r in top]
+    comparison = {
+        "scene": scene,
+        "size": [width, height],
+        "total_pixels": total,
+        "changed_pixels": changed,
+        "percent_changed": round(changed / total * 100, 4) if total else 0.0,
+        "tolerance": tolerance,
+        "regions": bboxes,
+        "region_count": len(regions),
+    }
+    out = json.loads(_result("ok", issues, {"shot": str(shot_path), "diff": str(diff_path), "baseline": str(base)}))
+    out["comparison"] = comparison
+    return json.dumps(out, indent=2, default=str)
+
+
 @tool("modify")
 def defold_inject_input(x: int, y: int, button: str = "left") -> str:
     """Inject a mouse click into the running game.

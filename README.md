@@ -87,6 +87,7 @@ machine-specific absolute path.
 | `defold_editor_command` | Generic editor command: any `/command/*` endpoint discovered at runtime from the live `/openapi.json`, optional JSON params. |
 | `defold_engine_info` | `/ping`, `/info`, `/state` of the running game. |
 | `defold_screenshot` ⚠️ | **Runtime** capture via the *Automation Bridge v2* extension (optional `after_frames`). |
+| `defold_screenshot_diff` | Visual regression: runtime screenshot vs `.baselines/<scene>.png` (Pillow): % changed pixels, region bounding boxes, diff image. |
 | `defold_inject_input` ⚠️ | Inject a mouse click via the *Automation Bridge v2*. |
 | `defold_stop` | Stop the editor launched by this server (best-effort). |
 | `defold_clean_build` | Clean build: delete artifacts and recompile. |
