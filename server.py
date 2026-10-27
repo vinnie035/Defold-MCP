@@ -292,7 +292,7 @@ def _safe(fn, *args, **kwargs):
     try:
         return fn(*args, **kwargs)
     except DefoldError as e:
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": _with_editor_hint(str(e))}
 
 
 def _result(status: str, issues=None, artifacts=None) -> str:
@@ -309,7 +309,7 @@ def _result(status: str, issues=None, artifacts=None) -> str:
 
 
 _UNREACHABLE_RE = re.compile(
-    r"(no editor port found|cannot reach|connection (refused|reset)|winerror \d+|timed out)",
+    r"(no editor port found|editor is not connected|cannot reach|connection (refused|reset)|winerror \d+|timed out)",
     re.I,
 )
 
@@ -466,7 +466,7 @@ def defold_preview(path: str, width: int = 1280, height: int = 720) -> list:
         png = client.preview(path, width, height)
         return _image(png, f"Editor preview of {path}")
     except DefoldError as e:
-        return _text({"error": str(e)})
+        return _text({"error": _with_editor_hint(str(e))})
 
 
 # ------------------------------------------------------------------ #
@@ -738,7 +738,7 @@ def defold_editor_command(op: str, params: dict | None = None) -> str:
         unknown_hint = f" Unknown command '{name}'. Available: {', '.join(names)}"
     result = _safe(client._post_command, name, data)
     if isinstance(result, dict) and result.get("success") is False:
-        return _result("error", [_with_editor_hint(str(result.get("error"))) + unknown_hint])
+        return _result("error", [str(result.get("error")) + unknown_hint])
     status_code = (result or {}).get("_http_status") if isinstance(result, dict) else None
     if status_code != 200:
         msg = json.dumps(result, default=str)[:1500]
@@ -938,7 +938,7 @@ def defold_engine_info() -> str:
             out[ep.strip("/")] = client._json(body)
         return json.dumps(out, indent=2, default=str)
     except DefoldError as e:
-        return json.dumps({"error": str(e)})
+        return json.dumps({"error": _with_editor_hint(str(e))})
 
 
 @tool("read")
@@ -956,7 +956,7 @@ def defold_screenshot(after_frames: int = 0) -> list:
         png = client.screenshot(after_frames=after_frames)
         return _image(png, "Runtime screenshot")
     except DefoldError as e:
-        return _text({"error": str(e)})
+        return _text({"error": _with_editor_hint(str(e))})
 
 
 @tool("read")
@@ -987,6 +987,13 @@ def defold_test_run(run_id: str = "", timeout: float = 90.0) -> str:
     log_path = outdir / "test.log"
 
     client = _client()
+    if not client.is_running():
+        # Not a game crash — the editor was never (or no longer is) up.
+        return _result(
+            "error",
+            [_with_editor_hint("No editor port found for this project; nothing to poll for TEST events.")],
+            {"log": str(log_path)},
+        )
     deadline = time.monotonic() + min(max(timeout, 1.0), 300.0)
     cases: list[dict] = []
     passed = failed = 0
@@ -1229,8 +1236,8 @@ def defold_clean_build() -> str:
     if not isinstance(result, dict):
         return _result("error", [str(result)])
     if result.get("error"):
-        # Editor down/unreachable — surface a clear, actionable message.
-        return _result("error", [_with_editor_hint(str(result["error"]))])
+        # Editor down/unreachable — hint already attached in ``_safe``.
+        return _result("error", [str(result["error"])])
     issues: list[str] = list(result.get("issues") or [])
     ok = bool(result.get("success")) and result.get("_http_status") == 200
     if not ok:
