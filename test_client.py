@@ -96,6 +96,18 @@ def main() -> int:
     finally:
         mock.stop()
 
+    # --- Pure logic checks (no editor required) ---
+    import server as _srv
+    lock_en = "copy failed: dmengine.exe is being used by another process."
+    lock_fr = ("java.io.FileNotFoundException: dmengine.exe "
+               "(Le processus ne peut pas acc\u00e9der au fichier car il est utilis\u00e9 par un autre processus).")
+    no_ctx = "some.dll is being used by another process."
+    unrelated = "Bob failed with exit code 1"
+    failures += 0 if _check("lock detect: English + dmengine ctx", _srv._is_engine_copy_lock(lock_en)) else 1
+    failures += 0 if _check("lock detect: French + dmengine ctx", _srv._is_engine_copy_lock(lock_fr)) else 1
+    failures += 0 if _check("lock detect: no dmengine context -> False", not _srv._is_engine_copy_lock(no_ctx)) else 1
+    failures += 0 if _check("lock detect: unrelated error -> False", not _srv._is_engine_copy_lock(unrelated)) else 1
+
     print()
     if failures:
         print(f"{failures} check(s) FAILED")

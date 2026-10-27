@@ -682,14 +682,33 @@ def _resolve_bob(download: bool = True) -> Path:
 def _run_bob(java_exe: str, bob_jar: Path, project: Path, options: list, commands: list) -> tuple:
     """Run ``java -jar bob.jar <options> <commands>``; returns (rc, stdout+stderr)."""
     cmd = [java_exe, "-jar", str(bob_jar), "--root", str(project)] + options + commands
-    p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=1800, cwd=str(project))
-    return p.returncode, (p.stdout or "") + (p.stderr or "")
+    p = subprocess.run(cmd, capture_output=True, timeout=1800, cwd=str(project))
+
+    def _dec(b: bytes) -> str:
+        # Bob writes platform-ANSI (cp1252 on fr/en Windows); try UTF-8 first.
+        if not b:
+            return ""
+        try:
+            return b.decode("utf-8")
+        except UnicodeDecodeError:
+            return b.decode("cp1252", errors="replace")
+
+    return p.returncode, _dec(p.stdout) + _dec(p.stderr)
 
 
 # Bob engine-copy failures when a stale dmengine.exe still holds the file.
+# OS lock messages are locale-dependent (en/fr/...), so match several phrasings.
 _STALE_ENGINE_LOCK_RE = re.compile(
-    r"being used by another process|winerror 32|access is denied", re.I
+    r"being used by another process|utilisé par un autre processus|"
+    r"winerror 32|access is denied", re.I
 )
+
+
+def _is_engine_copy_lock(log: str) -> bool:
+    """True when the failed build log shows a lock on the dmengine copy."""
+    if not re.search(r"dmengine", log, re.I):
+        return False
+    return _STALE_ENGINE_LOCK_RE.search(log) is not None
 
 
 def _kill_stale_engines(project: Path) -> list[int]:
@@ -828,15 +847,22 @@ def defold_bob_build(settings_name: str = "", settings_file: str = "", target_pl
         if target_platform:
             options += ["--platform", target_platform]
         rc, log = _run_bob(java_exe, bob_jar, project, options, ["resolve", "build"])
-        if rc != 0 and _STALE_ENGINE_LOCK_RE.search(log):
+        if rc != 0 and _is_engine_copy_lock(log):
             # A stale engine built from this project locks the engine copy.
             killed = _kill_stale_engines(project)
-            issues.append(
-                f"Engine copy lock detected; killed {len(killed)} stale dmengine "
-                f"process(es) under .cache/bob and retried once."
-            )
-            time.sleep(1.5)
-            rc, log = _run_bob(java_exe, bob_jar, project, options, ["resolve", "build"])
+            if killed:
+                issues.append(
+                    f"Engine copy lock detected; killed {len(killed)} stale dmengine "
+                    f"process(es) under .cache/bob and retried once."
+                )
+                time.sleep(1.5)
+                rc, log = _run_bob(java_exe, bob_jar, project, options, ["resolve", "build"])
+            else:
+                issues.append(
+                    "Engine copy is locked by a running dmengine that was not launched "
+                    "from this project's .cache/bob (e.g. the editor's game). Stop it "
+                    "with defold_stop and retry."
+                )
     except subprocess.TimeoutExpired:
         return _result("error", ["bob timed out after 30 min."], artifacts)
     except DefoldError as e:
