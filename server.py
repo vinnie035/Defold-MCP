@@ -308,6 +308,20 @@ def _result(status: str, issues=None, artifacts=None) -> str:
     )
 
 
+_UNREACHABLE_RE = re.compile(
+    r"(no editor port found|cannot reach|connection (refused|reset)|winerror \d+|timed out)",
+    re.I,
+)
+
+
+def _with_editor_hint(message: str) -> str:
+    """Append an actionable hint when the failure is a dead/unreachable editor."""
+    if _UNREACHABLE_RE.search(str(message)):
+        return (f"{message} — The Defold editor is not reachable on this project. "
+                "Run defold_open_project first.")
+    return str(message)
+
+
 def _new_run_id(prefix: str = "run") -> str:
     """Run id for the ``ai_work/artifacts/<run-id>/`` convention."""
     return f"{prefix}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
@@ -724,7 +738,7 @@ def defold_editor_command(op: str, params: dict | None = None) -> str:
         unknown_hint = f" Unknown command '{name}'. Available: {', '.join(names)}"
     result = _safe(client._post_command, name, data)
     if isinstance(result, dict) and result.get("success") is False:
-        return _result("error", [str(result.get("error")) + unknown_hint])
+        return _result("error", [_with_editor_hint(str(result.get("error"))) + unknown_hint])
     status_code = (result or {}).get("_http_status") if isinstance(result, dict) else None
     if status_code != 200:
         msg = json.dumps(result, default=str)[:1500]
@@ -1167,8 +1181,9 @@ def defold_stop() -> str:
     Returns structured JSON ``{status, issues[], artifacts{}}``. Does nothing if
     the editor was not launched by this server session (reported as an issue).
 
-    Deterministic verification: after killing the process tree, re-checks that
-    the editor is no longer reachable; status is "ok" only when it has gone down.
+    Deterministic verification: after killing the process tree, polls for up to
+    10 s until the editor is no longer reachable (port release can lag behind
+    process death); status is "ok" only when it has gone down.
     """
     client = _client()
     result = _safe(client.stop)
@@ -1179,6 +1194,12 @@ def defold_stop() -> str:
     if not stopped:
         issues.append(str(result.get("detail") or "Editor was not launched by this MCP session; stop is a no-op."))
     else:
+        # Port release can lag behind process death; poll briefly before judging.
+        deadline = time.monotonic() + 10.0
+        while client.is_running():
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.5)
         try:
             if client.is_running():
                 issues.append("Editor still reports as reachable after stop (port may take a moment to release).")
@@ -1207,6 +1228,9 @@ def defold_clean_build() -> str:
     result = _safe(client.clean_build)
     if not isinstance(result, dict):
         return _result("error", [str(result)])
+    if result.get("error"):
+        # Editor down/unreachable — surface a clear, actionable message.
+        return _result("error", [_with_editor_hint(str(result["error"]))])
     issues: list[str] = list(result.get("issues") or [])
     ok = bool(result.get("success")) and result.get("_http_status") == 200
     if not ok:
