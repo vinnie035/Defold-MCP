@@ -270,9 +270,11 @@ Documented from the full end-to-end verification (2026-10-26, Windows):
   are resolved by Bob itself; an unsupported platform fails with
   `Platform <name> not supported` (structured error + log under
   `ai_work/artifacts/<run-id>/`). This is a toolchain limitation, not a server bug.
-- **Stale engine process**: a leftover `dmengine.exe` from a crashed run can lock
-  `build/<platform>/dmengine.exe`, making the engine-copy step of
-  `defold_bob_build` fail. Kill the stale process before rebuilding.
+- **Stale engine process (auto-recovered)**: a leftover `dmengine.exe` built from
+  this project can lock the engine-copy step of `defold_bob_build`. The tool now
+  detects the copy-lock error, kills only `dmengine.exe` processes running from
+  the project's `.cache/bob/` tree (editor-launched engines are never touched),
+  and retries the build once. A manual kill is only needed if the retry fails.
 
 ## Important notes
 
