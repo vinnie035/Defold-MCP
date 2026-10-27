@@ -260,7 +260,7 @@ Dynamic commands: `defold_editor_command(op, params)` exposes every `/command/*`
 
 ## Known limitations
 
-Documented from the full end-to-end verification (2026-10-26, Windows):
+Documented from the full end-to-end verification (2026-10-27, Windows):
 
 - **`defold_stop` is best-effort**: it only stops editor/game processes that were
   launched *by this MCP client*. A game started from the editor UI (or by
@@ -271,14 +271,18 @@ Documented from the full end-to-end verification (2026-10-26, Windows):
   `Platform <name> not supported` (structured error + log under
   `ai_work/artifacts/<run-id>/`). This is a toolchain limitation, not a server bug.
 - **Stale engine process (auto-recovered)**: a leftover `dmengine.exe` built from
-  this project can lock the engine-copy step of `defold_bob_build`. The tool now
-  detects the copy-lock error, kills only `dmengine.exe` processes running from
-  the project's `.cache/bob/` tree (editor-launched engines are never touched),
-  and retries the build once. A manual kill is only needed if the retry fails.
+  this project can lock the engine-copy step of `defold_bob_build`. The tool
+  detects the copy-lock error (locale-aware: English *and* French Windows
+  messages, decoded via UTF-8 → cp1252 fallback), kills only `dmengine.exe`
+  processes running from the project's `.cache/bob/` tree (editor-launched
+  engines are never touched) and retries once. If nothing under `.cache/bob`
+  was killed — e.g. the editor's own game is locking the copy — it does not
+  retry blindly: it returns a structured issue telling you to stop that engine
+  with `defold_stop` (or close the editor's game) and re-run the build.
 
 ## Important notes
 
-- **Last full verification (2026-10-26)**: all 64 tools exercised end-to-end
+- **Last full verification (2026-10-27)**: all 64 tools exercised end-to-end
   against a live editor + running game on Windows (Automation Bridge v2). The
   two environment-dependent caveats are in [Known limitations](#known-limitations).
 - **Automatic project detection**: the active project follows the Defold editor
